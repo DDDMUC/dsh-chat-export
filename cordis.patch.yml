@@ -1,0 +1,15 @@
+# dsh-chat-export bundle patch: inserts the plugin row into the profile roster.
+#
+# The node half owns the `/export-md` human command and the authenticated
+# `/api/dsh-chat-export.*` routes (transcript read, pending command request,
+# directory save, Markdown preview); the browser half (exports "./client")
+# mounts the Session-header "导出文字稿" button, its option dialog, and the
+# download trigger.
+#
+# The entry name is the BARE package name on purpose: the client-module scanner
+# treats it as a package specifier and resolves `<name>/package.json`, so a
+# subpath entry would be cached as "not a client package" and the browser half
+# would silently never load.
+- insert:
+    - id: dsh-chat-export
+      name: 'dsh-chat-export'
