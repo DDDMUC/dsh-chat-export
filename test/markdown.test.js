@@ -67,6 +67,15 @@ describe('formatting helpers', () => {
     expect(formatDuration(null)).toBe('')
   })
 
+  it('never prints a rounded-up 60 in the smaller unit', () => {
+    // 2519.6s used to render as "41m 60s": the remainder was rounded after the
+    // split instead of before it.
+    expect(formatDuration(2_519_600)).toBe('42m 00s')
+    expect(formatDuration(3_599_600)).toBe('1h 00m')
+    expect(formatDuration(3_599_000)).toBe('59m 59s')
+    expect(formatDuration(59_600)).toBe('1m 00s')
+  })
+
   it('groups digits', () => {
     expect(formatNumber(1234567)).toBe('1,234,567')
     expect(formatNumber(undefined)).toBe('0')

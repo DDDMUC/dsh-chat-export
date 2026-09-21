@@ -42,13 +42,16 @@ export function formatClock(epochMs) {
 export function formatDuration(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return ''
   if (ms < 1000) return `${Math.round(ms)}ms`
-  const seconds = ms / 1000
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const minutes = Math.floor(seconds / 60)
-  const rest = Math.round(seconds - minutes * 60)
-  if (minutes < 60) return `${minutes}m ${String(rest).padStart(2, '0')}s`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${String(minutes - hours * 60).padStart(2, '0')}m`
+  // Round to whole seconds FIRST. Splitting an unrounded value and rounding the
+  // remainder afterwards prints things like "41m 60s".
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) return `${(ms / 1000).toFixed(1)}s`
+  const seconds = totalSeconds % 60
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  if (totalMinutes < 60) return `${totalMinutes}m ${String(seconds).padStart(2, '0')}s`
+  const minutes = totalMinutes % 60
+  const hours = Math.floor(totalMinutes / 60)
+  return `${hours}h ${String(minutes).padStart(2, '0')}m`
 }
 
 /** Thousands-separated integer. */
