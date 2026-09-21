@@ -8,6 +8,7 @@ import {
   formatDuration,
   formatNumber,
   formatStamp,
+  normalizeMessageBody,
   prettyJson,
   renderMarkdown,
 } from '../src/markdown.js'
@@ -235,5 +236,45 @@ describe('renderMarkdown', () => {
     // No run of four or more newlines anywhere: Markdown renders those as
     // stray blank space and they usually mean a joining bug.
     expect(markdown).not.toMatch(/\n{4,}/u)
+  })
+})
+
+describe('normalizeMessageBody', () => {
+  it('demotes headings below the message level', () => {
+    expect(normalizeMessageBody('# 任务')).toBe('#### 任务')
+    expect(normalizeMessageBody('## 背景')).toBe('##### 背景')
+    expect(normalizeMessageBody('### 细节')).toBe('###### 细节')
+    expect(normalizeMessageBody('###### 已是最深')).toBe('###### 已是最深')
+  })
+
+  it('leaves prose and lists alone', () => {
+    const body = '普通文字\n\n- 项目一\n- 项目二\n\n> 引用'
+    expect(normalizeMessageBody(body)).toBe(body)
+  })
+
+  it('does not touch a heading-looking line inside a fence', () => {
+    const body = '```\n# 这是代码里的井号\n```'
+    expect(normalizeMessageBody(body)).toBe(body)
+  })
+
+  it('does not touch HTML-looking lines inside a fence', () => {
+    const body = '```html\n<details><summary>x</summary></details>\n```'
+    expect(normalizeMessageBody(body)).toBe(body)
+  })
+
+  it('escapes block-level HTML in prose so it cannot open a disclosure', () => {
+    expect(normalizeMessageBody('<details>\n<summary>偷来的折叠</summary>\n</details>')).toBe(
+      '\\<details>\n\\<summary>偷来的折叠\\</summary>\n\\</details>',
+    )
+  })
+
+  it('escapes only details and summary, not other tags', () => {
+    expect(normalizeMessageBody('<system-reminder>x</system-reminder>')).toBe('<system-reminder>x</system-reminder>')
+    expect(normalizeMessageBody('<div>ok</div>')).toBe('<div>ok</div>')
+  })
+
+  it('handles an empty body and a missing one', () => {
+    expect(normalizeMessageBody('')).toBe('')
+    expect(normalizeMessageBody(undefined)).toBe('')
   })
 })

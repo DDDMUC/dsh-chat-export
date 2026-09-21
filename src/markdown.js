@@ -136,17 +136,66 @@ function renderImage(part, context) {
     return `> 🖼 图片：${name}${detail === '' ? '' : `（${detail}）`}`
   }
   const detail = describeAttachment(part.ref)
-  return `![${name}](${source})${detail === '' ? '' : `\n\n<sub>${name} · ${detail}</sub>`}`
+  return `![${name}](${source})${detail === '' ? '' : `\n\n_${name} · ${detail}_`}`
+}
+
+/**
+ * Re-level and de-fang one message body before it enters the document.
+ *
+ * Two things go wrong when conversation text is dropped into a transcript as
+ * raw Markdown:
+ *
+ *   * its headings collide with the transcript's own outline - a session that
+ *     starts with `# 任务：...` otherwise renders as the document's title, and
+ *     the reader loses the turn structure entirely;
+ *   * a literal `<details>` in the conversation opens a real disclosure in
+ *     every renderer that supports raw HTML, which silently swallows the rest
+ *     of the message.
+ *
+ * So headings are shifted below the message level, and block-level HTML tags
+ * are backslash-escaped. Both edits are invisible in the rendered output: an
+ * escaped `\<details>` still displays as `<details>`.
+ *
+ * Code fences are left untouched - their contents are code, not markup.
+ *
+ * @param text - one message body.
+ * @returns the body with headings demoted and block HTML neutralized.
+ */
+export function normalizeMessageBody(text) {
+  const lines = String(text ?? '').split('\n')
+  const out = []
+  let fence = null
+  for (const line of lines) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)
+    if (fence === null && marker !== null) {
+      fence = marker[1][0].repeat(marker[1].length)
+      out.push(line)
+      continue
+    }
+    if (fence !== null) {
+      if (line.trimStart().startsWith(fence)) fence = null
+      out.push(line)
+      continue
+    }
+    const heading = /^(#{1,6})(\s+.*)$/u.exec(line)
+    if (heading !== null) {
+      const level = Math.min(6, heading[1].length + 3)
+      out.push(`${'#'.repeat(level)}${heading[2]}`)
+      continue
+    }
+    out.push(line.replace(/<(\/?)(details|summary)\b/giu, '\\<$1$2'))
+  }
+  return out.join('\n')
 }
 
 /** Render one message part list. */
 function renderParts(parts, context) {
   const blocks = []
   for (const part of parts) {
-    if (part.type === 'text') blocks.push(part.text)
+    if (part.type === 'text') blocks.push(normalizeMessageBody(part.text))
     else if (part.type === 'reasoning') {
       const length = Array.from(part.text).length
-      blocks.push(`<details>\n<summary>💭 思考（${formatNumber(length)} 字）</summary>\n\n${part.text}\n\n</details>`)
+      blocks.push(`<details>\n<summary>💭 思考（${formatNumber(length)} 字）</summary>\n\n${normalizeMessageBody(part.text)}\n\n</details>`)
     } else if (part.type === 'image') blocks.push(renderImage(part, context))
     else if (part.type === 'file') {
       const source = context.imageSrc === undefined ? null : context.imageSrc(part.ref)
@@ -218,7 +267,7 @@ export function renderMarkdown(transcript, context = {}) {
   for (const entry of transcript.entries) {
     if (entry.kind === 'turn') {
       const bits = [`## 回合 ${entry.index ?? '?'}`]
-      if (entry.durationMs !== null) bits.push(`<sub>${formatDuration(entry.durationMs)}</sub>`)
+      if (entry.durationMs !== null) bits.push('·', formatDuration(entry.durationMs))
       out.push('', bits.join(' '))
       continue
     }
@@ -253,7 +302,7 @@ export function renderMarkdown(transcript, context = {}) {
     }
 
     if (entry.kind === 'system') {
-      out.push('', '<details>', `<summary>⚙️ 系统提示（回合 ${entry.turn ?? '?'}）</summary>`, '', entry.text, '', '</details>')
+      out.push('', '<details>', `<summary>⚙️ 系统提示（回合 ${entry.turn ?? '?'}）</summary>`, '', normalizeMessageBody(entry.text), '', '</details>')
     }
   }
 
