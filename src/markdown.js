@@ -141,7 +141,7 @@ function renderImage(part, context) {
   const name = attachmentName(part.ref)
   if (source === null || source === undefined) {
     const detail = describeAttachment(part.ref)
-    return `> 🖼 图片：${name}${detail === '' ? '' : `（${detail}）`}`
+    return `> 图片：${name}${detail === '' ? '' : `（${detail}）`}`
   }
   const detail = describeAttachment(part.ref)
   return `![${name}](${source})${detail === '' ? '' : `\n\n_${name} · ${detail}_`}`
@@ -203,12 +203,12 @@ function renderParts(parts, context) {
     if (part.type === 'text') blocks.push(normalizeMessageBody(part.text))
     else if (part.type === 'reasoning') {
       const length = Array.from(part.text).length
-      blocks.push(`<details>\n<summary>💭 思考（${formatNumber(length)} 字）</summary>\n\n${normalizeMessageBody(part.text)}\n\n</details>`)
+      blocks.push(`<details>\n<summary>思考（${formatNumber(length)} 字）</summary>\n\n${normalizeMessageBody(part.text)}\n\n</details>`)
     } else if (part.type === 'image') blocks.push(renderImage(part, context))
     else if (part.type === 'file') {
       const source = context.imageSrc === undefined ? null : context.imageSrc(part.ref)
       const name = attachmentName(part.ref)
-      blocks.push(source === null || source === undefined ? `> 📎 文件：${name}` : `📎 [${name}](${source})`)
+      blocks.push(source === null || source === undefined ? `> 文件：${name}` : `[${name}](${source})`)
     }
   }
   return blocks
@@ -216,7 +216,8 @@ function renderParts(parts, context) {
 
 /** The one-line label for a tool entry, used as its disclosure summary. */
 export function toolSummary(entry) {
-  const bits = [entry.result !== null && entry.result.isError ? '❌' : '🔧', `\`${entry.name}\``]
+  const bits = [`\`${entry.name}\``]
+  if (entry.result !== null && entry.result.isError) bits.push('· 出错')
   const duration = formatDuration(entry.durationMs)
   if (duration !== '') bits.push(`· ${duration}`)
   const result = entry.result
@@ -265,7 +266,7 @@ export function prettyJson(text) {
 
 /** Label for one assistant heading. */
 function assistantLabel(entry, options) {
-  const bits = ['🤖 助手']
+  const bits = ['助手']
   if (options.timestamps && entry.at > 0) bits.push(formatClock(entry.at))
   if (entry.model !== '') bits.push(`\`${entry.model}\``)
   if (entry.interrupted) bits.push('（被打断）')
@@ -300,13 +301,12 @@ export function renderMarkdown(transcript, context = {}) {
     }
 
     if (entry.kind === 'note') {
-      const icon = entry.level === 'warn' ? '⚠️' : 'ℹ️'
-      out.push('', `> ${icon} ${entry.text}${meta.options.timestamps && entry.at > 0 ? ` — ${formatClock(entry.at)}` : ''}`)
+      out.push('', `> ${entry.text}${meta.options.timestamps && entry.at > 0 ? ` — ${formatClock(entry.at)}` : ''}`)
       continue
     }
 
     if (entry.kind === 'user') {
-      const bits = [entry.human ? '🧑 用户' : '📥 注入内容']
+      const bits = [entry.human ? '用户' : '注入内容']
       if (meta.options.timestamps && entry.at > 0) bits.push(formatClock(entry.at))
       if (!entry.human && entry.origin !== '') bits.push(`\`${entry.origin}\``)
       out.push('', `### ${bits.join(' · ')}`)
@@ -329,7 +329,7 @@ export function renderMarkdown(transcript, context = {}) {
     }
 
     if (entry.kind === 'system') {
-      out.push('', '<details>', `<summary>⚙️ 系统提示（回合 ${entry.turn ?? '?'}）</summary>`, '', normalizeMessageBody(entry.text), '', '</details>')
+      out.push('', '<details>', `<summary>系统提示（回合 ${entry.turn ?? '?'}）</summary>`, '', normalizeMessageBody(entry.text), '', '</details>')
     }
   }
 

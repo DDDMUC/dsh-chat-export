@@ -166,9 +166,9 @@ describe('renderMarkdown', () => {
     const events = [turnStart(0, 1), userMessage(1, 'm', [text('hi')]), assistantMessage(2, [text('yo')])]
     const on = render(events, { timestamps: true }).markdown
     const off = render(events, { timestamps: false }).markdown
-    expect(on).toMatch(/### 🧑 用户 · \d{2}:\d{2}:\d{2}/u)
-    expect(on).toMatch(/### 🤖 助手 · \d{2}:\d{2}:\d{2}/u)
-    expect(off).not.toMatch(/### 🧑 用户 · \d/u)
+    expect(on).toMatch(/### 用户 · \d{2}:\d{2}:\d{2}/u)
+    expect(on).toMatch(/### 助手 · \d{2}:\d{2}:\d{2}/u)
+    expect(off).not.toMatch(/### 用户 · \d/u)
   })
 
   it('folds reasoning into a details block only when enabled', () => {
@@ -177,7 +177,7 @@ describe('renderMarkdown', () => {
     const on = render(events, { thinking: true }).markdown
     expect(on).toContain('<details>')
     expect(on).toContain('内心戏')
-    expect(on).toContain('💭 思考')
+    expect(on).toContain('思考（')
   })
 
   it('renders a tool call as ONE collapsed line with arguments and result inside', () => {
@@ -189,7 +189,7 @@ describe('renderMarkdown', () => {
     const { markdown } = render(events, {})
     // A single disclosure, not a bold heading plus a separate result block.
     expect((markdown.match(/<details>/g) ?? []).length).toBe(1)
-    expect(markdown).toMatch(/<summary>🔧 `read_file` · [\d.]+s · 结果 2 行<\/summary>/u)
+    expect(markdown).toMatch(/<summary>`read_file` · [\d.]+s · 结果 2 行<\/summary>/u)
     expect(markdown).toContain('**参数**')
     expect(markdown).toContain('**结果**')
     expect(markdown).toContain('"path": "a.js"')
@@ -207,7 +207,7 @@ describe('renderMarkdown', () => {
   it('labels a failed tool result and its truncated size on the summary line', () => {
     const events = [turnStart(0, 1), toolCallEvent(1, 'c1', 'bash'), toolResultEvent(2, 'c1', 'x'.repeat(9000), { isError: true })]
     const { markdown } = render(events, { toolResultLimit: 100 })
-    expect(markdown).toMatch(/<summary>❌ `bash` · [\d.]+s · 结果已截断（共 9,000 字）<\/summary>/u)
+    expect(markdown).toMatch(/<summary>`bash` · 出错 · [\d.]+s · 结果已截断（共 9,000 字）<\/summary>/u)
   })
 
   it('omits tool blocks when the option is off', () => {
@@ -227,7 +227,7 @@ describe('renderMarkdown', () => {
   it('describes an image when no source is available', () => {
     const events = [turnStart(0, 1), assistantMessage(1, [image('sha256:aa', { name: 'shot.png' })])]
     const { markdown } = render(events, {}, {})
-    expect(markdown).toContain('🖼 图片：shot.png')
+    expect(markdown).toContain('图片：shot.png')
     expect(markdown).not.toContain('![')
   })
 
@@ -242,7 +242,7 @@ describe('renderMarkdown', () => {
   it('marks injected messages and their producer', () => {
     const events = [turnStart(0, 1), injectedMessage(1, 'i', [text('reminder')], { kind: 'plugin', plugin: 'free-search' })]
     const { markdown } = render(events, { injected: true })
-    expect(markdown).toContain('📥 注入内容')
+    expect(markdown).toContain('注入内容')
     expect(markdown).toContain('plugin:free-search')
   })
 
@@ -257,8 +257,20 @@ describe('renderMarkdown', () => {
 
   it('renders a note for an abnormal turn end', () => {
     const { markdown } = render([turnStart(0, 1), turnEnd(1, 1, 'interrupted')])
-    expect(markdown).toContain('⚠️')
-    expect(markdown).toContain('interrupted')
+    expect(markdown).toMatch(/^> 回合 1 结束：interrupted/mu)
+  })
+
+  it('carries no decorative emoji anywhere in the output', () => {
+    const { header: sessionHeader, events } = sampleSession()
+    const transcript = buildTranscript(sessionHeader, events, {
+      ...defaultOptions(),
+      thinking: true,
+      injected: true,
+      system: true,
+    })
+    const markdown = renderMarkdown(transcript, { imageSrc: () => 'assets/001-shot.png' })
+    const emoji = markdown.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu) ?? []
+    expect(emoji).toEqual([])
   })
 
   it('notes the scope when only the current surface was exported', () => {
@@ -277,7 +289,7 @@ describe('renderMarkdown', () => {
     const markdown = renderMarkdown(transcript, { imageSrc: () => 'assets/001-shot.png' })
     expect(markdown).toContain('# 示例会话')
     expect(markdown).toContain('## 回合 3')
-    expect(markdown).toContain('🤖 助手')
+    expect(markdown).toContain('助手')
     expect(markdown).toContain('assets/001-shot.png')
     expect(markdown).toContain('只有 spliced 里有这条')
     expect(markdown.endsWith('\n')).toBe(true)

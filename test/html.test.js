@@ -144,7 +144,7 @@ describe('renderHtml', () => {
     const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'bash'), toolResultEvent(2, 'c', 'boom', { isError: true })]
     const html = render(events, {})
     expect(html).toContain('<details class="tool err">')
-    expect(html).toContain('❌')
+    expect(html).toContain('出错')
   })
 
   it('embeds an image with its caption', () => {
@@ -157,8 +157,17 @@ describe('renderHtml', () => {
   it('describes an image that has no source', () => {
     const events = [turnStart(0, 1), assistantMessage(1, [image('sha256:aa', { name: 'shot.png' })])]
     const html = render(events, {}, {})
-    expect(html).toContain('🖼 图片：shot.png')
+    expect(html).toContain('图片：shot.png')
     expect(html).not.toContain('<img')
+  })
+
+  it('carries no decorative emoji anywhere in the output', () => {
+    const { header: sessionHeader, events } = sampleSession()
+    const transcript = buildTranscript(sessionHeader, events, { ...defaultOptions(), thinking: true, injected: true, system: true })
+    const html = renderHtml(transcript, { imageSrc: () => 'assets/001-shot.png' })
+    const body = html.slice(html.indexOf('<body>'))
+    const emoji = body.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu) ?? []
+    expect(emoji).toEqual([])
   })
 
   it('renders a whole sample session with balanced section tags', () => {

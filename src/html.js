@@ -222,7 +222,7 @@ function imageHtml(ref, context) {
   const source = context.imageSrc === undefined ? null : context.imageSrc(ref)
   const name = ref.name === undefined || ref.name === '' ? String(ref.attachmentId ?? '图片') : String(ref.name)
   if (source === null || source === undefined) {
-    return `<p class="note">🖼 图片：${escapeHtml(name)}（未内嵌）</p>`
+    return `<p class="note">图片：${escapeHtml(name)}（未内嵌）</p>`
   }
   const meta = []
   if (typeof ref.width === 'number' && typeof ref.height === 'number') meta.push(`${ref.width}×${ref.height}`)
@@ -240,7 +240,7 @@ function partsHtml(parts, context, openThinking) {
     else if (part.type === 'reasoning') {
       const length = Array.from(part.text).length
       out.push(
-        `<details class="think"${openThinking ? ' open' : ''}><summary>💭 思考（${length} 字）</summary><div class="inner">${escapeHtml(
+        `<details class="think"${openThinking ? ' open' : ''}><summary>思考（${length} 字）</summary><div class="inner">${escapeHtml(
           part.text,
         )}</div></details>`,
       )
@@ -250,8 +250,8 @@ function partsHtml(parts, context, openThinking) {
       const name = String(part.ref.name ?? part.ref.attachmentId ?? '文件')
       out.push(
         source === null || source === undefined
-          ? `<p class="note">📎 文件：${escapeHtml(name)}</p>`
-          : `<p>📎 <a href="${escapeHtml(source)}" download>${escapeHtml(name)}</a></p>`,
+          ? `<p class="note">文件：${escapeHtml(name)}</p>`
+          : `<p><a href="${escapeHtml(source)}" download>${escapeHtml(name)}</a></p>`,
       )
     }
   }
@@ -269,7 +269,7 @@ function toolHtml(entry, context, openTools) {
       : entry.result.truncated
         ? ` · 结果已截断（共 ${entry.result.totalChars.toLocaleString('en-US')} 字）`
         : ` · 结果 ${entry.result.totalLines.toLocaleString('en-US')} 行`
-  out.push(`<summary>${failed ? '❌' : '🔧'} <code>${escapeHtml(entry.name)}</code>${escapeHtml(duration)}${escapeHtml(tail)}</summary><div class="body">`)
+  out.push(`<summary><code>${escapeHtml(entry.name)}</code>${failed ? ' · 出错' : ''}${escapeHtml(duration)}${escapeHtml(tail)}</summary><div class="body">`)
   if (entry.arguments !== '') {
     out.push(`<div class="md">${renderMarkdownBody('```json\n' + prettyJson(entry.arguments) + '\n```')}</div>`)
   }
@@ -367,18 +367,18 @@ export function renderHtml(transcript, context = {}) {
       continue
     }
     if (entry.kind === 'note') {
-      parts.push(`<p class="note${entry.level === 'warn' ? ' warn' : ''}">${entry.level === 'warn' ? '⚠️' : 'ℹ️'} ${escapeHtml(entry.text)}</p>`)
+      parts.push(`<p class="note${entry.level === 'warn' ? ' warn' : ''}">${escapeHtml(entry.text)}</p>`)
       continue
     }
     if (entry.kind === 'user') {
-      const label = entry.human ? '🧑 用户' : `📥 注入内容${entry.origin === '' ? '' : ` · ${entry.origin}`}`
+      const label = entry.human ? '用户' : `注入内容${entry.origin === '' ? '' : ` · ${entry.origin}`}`
       const when = meta.options.timestamps ? ` · ${stamp(entry.at)}` : ''
       parts.push(`<h3>${escapeHtml(label)}${when}</h3>`)
       parts.push(`<div class="msg ${entry.human ? 'user' : 'injected'}">${partsHtml(entry.parts, context, context.openThinking === true)}</div>`)
       continue
     }
     if (entry.kind === 'assistant') {
-      const bits = ['🤖 助手']
+      const bits = ['助手']
       if (meta.options.timestamps) bits.push(stamp(entry.at))
       if (entry.model !== '') bits.push(entry.model)
       if (entry.interrupted) bits.push('被打断')
@@ -392,7 +392,7 @@ export function renderHtml(transcript, context = {}) {
       continue
     }
     if (entry.kind === 'system') {
-      parts.push(`<div class="msg system"><h3>⚙️ 系统提示（回合 ${entry.turn ?? '?'}）</h3><div class="md">${renderMarkdownBody(entry.text)}</div></div>`)
+      parts.push(`<div class="msg system"><h3>系统提示（回合 ${entry.turn ?? '?'}）</h3><div class="md">${renderMarkdownBody(entry.text)}</div></div>`)
     }
   }
   if (openTurn) parts.push('</section>')
