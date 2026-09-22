@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   COMMAND_HINT,
   contentTypeFor,
+  extensionFor,
+  isTextFormat,
   dateStamp,
   defaultOptions,
   effectiveImageMode,
@@ -67,6 +69,13 @@ describe('parseCommandInput', () => {
   it('normalizes markdown spellings', () => {
     expect(parseCommandInput('markdown').options.format).toBe('md')
     expect(parseCommandInput('MKD').options.format).toBe('md')
+  })
+
+  it('accepts plain text under every spelling', () => {
+    for (const token of ['txt', 'text', 'plain', 'TXT']) {
+      expect(parseCommandInput(token).options.format, token).toBe('txt')
+      expect(parseCommandInput(token).errors, token).toEqual([])
+    }
   })
 
   it('parses boolean flags in both directions', () => {
@@ -184,6 +193,38 @@ describe('optionsFromQuery', () => {
   it('omits values left at their default', () => {
     const query = optionsToQuery(defaultOptions())
     expect([...query.keys()]).toEqual(['format'])
+  })
+})
+
+describe('format helpers', () => {
+  it('maps every format to an extension and a content type', () => {
+    expect(extensionFor('md')).toBe('md')
+    expect(extensionFor('html')).toBe('html')
+    expect(extensionFor('txt')).toBe('txt')
+    expect(extensionFor('zip')).toBe('zip')
+    expect(contentTypeFor('txt')).toBe('text/plain; charset=utf-8')
+    expect(contentTypeFor('md')).toMatch(/^text\/markdown/)
+    expect(contentTypeFor('html')).toMatch(/^text\/html/)
+    expect(contentTypeFor('zip')).toBe('application/zip')
+  })
+
+  it('treats the three text formats as savable and the bundle as not', () => {
+    expect(isTextFormat('md')).toBe(true)
+    expect(isTextFormat('html')).toBe(true)
+    expect(isTextFormat('txt')).toBe(true)
+    expect(isTextFormat('zip')).toBe(false)
+  })
+
+  it('builds a .txt filename', () => {
+    const created = new Date(2026, 0, 2).getTime()
+    expect(exportFilename('txt', '我的会话', created)).toBe('dsh-chat-我的会话-2026-01-02.txt')
+  })
+
+  it('round-trips txt through the query', () => {
+    const { options, errors } = optionsFromQuery(new URLSearchParams('format=txt'))
+    expect(errors).toEqual([])
+    expect(options.format).toBe('txt')
+    expect(optionsToQuery(options).get('format')).toBe('txt')
   })
 })
 

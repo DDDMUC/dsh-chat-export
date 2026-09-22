@@ -74,7 +74,7 @@ window.__ModuleLoader__.load({
       'notice.saved': '已保存到 {path}',
       'error.no-session': '无法确定当前会话。',
       'error.generic': '导出失败：{message}',
-      'error.save-zip': '保存到目录只支持 Markdown 与 HTML；ZIP 请改用浏览器下载。',
+      'error.save-zip': '保存到目录只支持 Markdown / HTML / 纯文本；ZIP 请改用浏览器下载。',
     }
 
     const en = {
@@ -124,7 +124,7 @@ window.__ModuleLoader__.load({
       'notice.saved': 'Saved to {path}',
       'error.no-session': 'Could not determine the current session.',
       'error.generic': 'Export failed: {message}',
-      'error.save-zip': 'Saving to a directory supports Markdown and HTML; download the ZIP instead.',
+      'error.save-zip': 'Saving to a directory supports Markdown, HTML, and plain text; download the ZIP instead.',
     }
 
     // --- style ----------------------------------------------------------------
@@ -496,6 +496,7 @@ window.__ModuleLoader__.load({
                     { value: 'md', label: 'format.md', hint: 'format.md.hint' },
                     { value: 'html', label: 'format.html', hint: 'format.html.hint' },
                     { value: 'zip', label: 'format.zip', hint: 'format.zip.hint' },
+                    { value: 'txt', label: 'format.txt', hint: 'format.txt.hint' },
                   ],
                 }),
               ],

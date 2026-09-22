@@ -7,6 +7,7 @@
 
 import { buildTranscript, attachmentKey } from './transcript.js'
 import { renderMarkdown } from './markdown.js'
+import { renderText } from './text.js'
 import { renderHtml } from './html.js'
 import { buildZip } from './zip.js'
 import { effectiveImageMode, exportBaseName, exportFilename, contentTypeFor, PLUGIN_ID } from './options.js'
@@ -113,6 +114,21 @@ export async function produceExport(input) {
     }
   }
 
+  if (format === 'txt') {
+    const text = renderText(transcript)
+    return {
+      format,
+      baseName,
+      filename: exportFilename('txt', transcript.meta.title, transcript.meta.createdAt),
+      contentType: contentTypeFor('txt'),
+      buffer: Buffer.from(text, 'utf8'),
+      files: [{ path: `${baseName}.txt`, data: text }],
+      transcript,
+      missingImages,
+      mode,
+    }
+  }
+
   if (format === 'html') {
     const html = renderHtml(transcript, { imageSrc })
     return {
@@ -130,9 +146,11 @@ export async function produceExport(input) {
 
   // A bundle references its assets relatively, so the same HTML renders on disk.
   const bundleHtml = renderHtml(transcript, { imageSrc: (ref) => imagePaths.get(attachmentKey(ref)) ?? null })
+  const bundleText = renderText(transcript)
   const entries = [
     { path: `${baseName}.md`, data: markdown },
     { path: `${baseName}.html`, data: bundleHtml },
+    { path: `${baseName}.txt`, data: bundleText },
   ]
   for (const entry of images) {
     const bytes = imageBytes.get(entry.key)

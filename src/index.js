@@ -17,6 +17,7 @@ import {
   API_PREFIX,
   COMMAND_HINT,
   contentDisposition,
+  isTextFormat,
   defaultOptions,
   extensionFor,
   exportFilename,
@@ -195,17 +196,17 @@ function resolveSaveDirectory(save, artifact, log, config) {
 /**
  * Write the text artifact of one export into a directory.
  *
- * Only Markdown and HTML can be saved: the host's `ctx.fs` exposes a text write
- * and no binary write, and routing around it with `node:fs` would ignore the
+ * Only text formats can be saved: the host's `ctx.fs` exposes a text write and
+ * no binary write, and routing around it with `node:fs` would ignore the
  * sandbox policy the session is running under. A ZIP therefore stays a
  * download, which is reported as such rather than silently producing nothing.
  */
 async function saveArtifact(ctx, services, resolved, artifact, log, config, signal) {
-  if (artifact.format === 'zip') {
+  if (!isTextFormat(artifact.format)) {
     throw new ExportError(
       400,
       'unsupported-save',
-      '保存到目录只支持 Markdown / HTML；ZIP 请用浏览器下载（宿主 ctx.fs 没有二进制写入）',
+      '保存到目录只支持 Markdown / HTML / 纯文本；ZIP 请用浏览器下载（宿主 ctx.fs 没有二进制写入）',
     )
   }
   const directory = resolveSaveDirectory(resolved.save, artifact, log, config)

@@ -25,7 +25,7 @@
 ### 特性
 
 - **两种入口** —— 会话头部「导出文字稿」按钮，或 `/export-md` 斜杠命令（避开官方的 `/export`）；命令解析出的选项会带进对话框，两边永远不会打架
-- **三种格式** —— Markdown（纯文本文字稿）、HTML（单文件、自包含样式、可打印成 PDF）、ZIP（Markdown + HTML + 图片素材 + `meta.json`）
+- **四种格式** —— Markdown、HTML（单文件、自包含样式、可打印成 PDF）、纯文本（无任何标记，终端/记事本都能读）、ZIP（md + html + txt + 图片素材 + `meta.json`）
 - **内容齐全** —— 用户/助手消息、思考块（可折叠）、工具调用与结果（可折叠、超长自动截断并标注）、代码块（围栏长度自适应，正文里的 ``` 撑不破）、图片附件、时间戳、会话标题 / 模型 / 用量统计
 - **导出前可预览** —— 对话框里点「预览开头」直接看 Markdown 开头
 - **两种落盘方式** —— 浏览器下载，或写进指定目录（走官方 `ctx.fs`，受会话沙箱约束）
@@ -72,6 +72,7 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 ```
 /export-md                           # Markdown，默认选项
 /export-md html                      # 自包含 HTML，可打印成 PDF
+/export-md txt                       # 纯文本，无任何标记
 /export-md zip --images=embed        # 打包，图片内嵌
 /export-md md --thinking --surface   # 带思考块，只导当前上下文
 /export-md html --save=/tmp/导出     # 直接写进目录
@@ -83,7 +84,10 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 
 | 参数 | 作用 |
 | --- | --- |
-| `md` / `markdown` / `html` / `zip` | 输出格式（位置参数，默认 `md`） |
+| `md` / `markdown` | Markdown（默认） |
+| `html` | 自包含 HTML |
+| `txt` / `text` / `plain` | 纯文本（不带任何标记） |
+| `zip` | 打包（内含 md + html + txt + 图片 + `meta.json`） |
 | `--thinking` / `--no-thinking` | 思考块（默认关） |
 | `--tools` / `--no-tools` | 工具调用与结果（默认开） |
 | `--system` / `--no-system` | 系统提示词（默认关） |
@@ -154,6 +158,42 @@ Markdown：
 
 **一次工具调用 = 一行，产物里没有任何装饰性图标。** 参数和结果都收在同一个折叠里，默认展开的只有「谁在什么时候说了什么」。876 次工具调用的长会话，肉眼可见的就是 876 行 `▶ \`名字\` · 耗时 · 结果 N 行`，需要哪次再点开。
 
+纯文本（`txt`，注意没有任何标记、图标、代码围栏，全靠分隔线和缩进）：
+
+```text
+想办法让我用上jev模型
+========================================================================
+
+session-48310605-bb1a-4966-a207-380f947e220b
+/Users/example/Documents/Default Project
+
+模型  commandcode/deepseek/deepseek-v4.1-flash
+时间  2026-09-21 21:51:26 → 2026-09-21 22:47:16（55m 50s）
+规模  1 轮 · 52 步 · 用户 1 条 · 助手 31 条 · 85 次工具调用
+用量  输入 78,004 · 输出 52,120 · 缓存读 4,302,080 · 合计 4,432,204
+
+由 dsh-chat-export 从 DeepSeek Harness 会话导出
+------------------------------------------------------------------------
+
+回合 1 · 42m 00s
+
+用户 · 21:51:45
+  想办法让我用上jev模型
+
+助手 · 21:51:51 · commandcode/deepseek/deepseek-v4.1-flash
+  我先搞清楚 "jev 模型" 指的是什么，同时看一下 DSH 的模型/提供商配置。
+
+  [工具] bash · 54ms · 结果 43 行
+    参数  {
+          "command": "pwd; echo \"--- workspace ---\"; ls -la"
+        }
+    结果  /Users/example/Documents/Default Project
+        --- workspace ---
+        total 1960
+```
+
+正文**原样照搬**（连 Markdown 标记一起）—— 宁愿保留几个星号，也不悄悄改你说过的话。
+
 文件名：`dsh-chat-<会话标题>-<日期>.<扩展名>`（标题里的路径分隔符与控制字符会被中和，中日韩字符保留）。
 
 <div align="center">
@@ -182,6 +222,7 @@ Markdown：
 
 - **「保存到目录」只支持 Markdown 和 HTML。** 宿主的 `ctx.fs` 只有文本写入、没有二进制写入；绕过它直接用 `node:fs` 会无视会话的沙箱策略。ZIP 请用浏览器下载（对话框里选 ZIP 时保存按钮会禁用并说明原因）。
 - **不导出子会话（subagent）。** v0.1.0 只导当前会话；子会话递归打包留给后续版本（官方 ZIP 的 `includeDescendants` 是那块功能）。
+- **纯文本里的图片只能给描述**（`[图片] shot.png（640×480, 2.0 KiB）`），txt 装不下二进制。
 - **PDF 是浏览器打印出来的，不是插件生成的。** 产物是 HTML，点「打印 / 另存为 PDF」由浏览器负责排版。
 - **用量数字来自 `assistant/message.data.usage`。** 官方日志里**没有**费用字段，所以只能给 token，给不了钱；`推理` 一栏在不上报该字段的 provider 上是 0。
 - **正文会被做两处「不影响观感」的规整**（否则一份带 `# 标题` 的提问会把整份文字稿的目录结构顶掉）：
@@ -217,7 +258,7 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 ### Features
 
 - **Two entry points** — a labelled "Export transcript" button in the Session header, or the `/export-md` command (which avoids the official `/export`). A typed line presets the dialog, so the two can never disagree.
-- **Three formats** — Markdown, self-contained HTML (printable to PDF), and a ZIP bundle (`transcript.md` + `transcript.html` + `assets/` + `meta.json`).
+- **Four formats** — Markdown, self-contained HTML (printable to PDF), plain text (no markers at all; readable in any terminal), and a ZIP bundle (`transcript.md` + `transcript.html` + `transcript.txt` + `assets/` + `meta.json`).
 - **Complete content** — user and assistant messages, foldable reasoning blocks, foldable tool calls and results with truncation markers, code fences that cannot be broken by the body, image attachments, timestamps, and the Session title, models, and usage.
 - **One tool call is one line.** Arguments and result share a single collapsed disclosure, so what you read by default is who said what and when; open a call only when you need it.
 - **Preview before exporting**, and **two outputs**: a browser download, or a write into a directory through the host filesystem.

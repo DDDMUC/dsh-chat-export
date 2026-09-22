@@ -11,7 +11,7 @@ export const PLUGIN_ID = 'dsh-chat-export'
 export const API_PREFIX = '/api/dsh-chat-export'
 
 /** Accepted output formats. */
-export const FORMATS = ['md', 'html', 'zip']
+export const FORMATS = ['md', 'html', 'zip', 'txt']
 
 /** Accepted image strategies. */
 export const IMAGE_MODES = ['auto', 'embed', 'assets', 'none']
@@ -104,6 +104,7 @@ export function tokenize(input) {
 function normalizeFormat(token) {
   const value = String(token).toLowerCase()
   if (value === 'markdown' || value === 'mdown' || value === 'mkd') return 'md'
+  if (value === 'text' || value === 'plain') return 'txt'
   return FORMATS.includes(value) ? value : undefined
 }
 
@@ -213,7 +214,8 @@ function exampleValueFor(name) {
 }
 
 /** Human-facing help line advertised through `input.hint` and the dialog. */
-export const COMMAND_HINT = '[md|html|zip] [--thinking] [--no-tools] [--surface] [--images=embed|assets|none] [--save=目录]'
+export const COMMAND_HINT =
+  '[md|html|zip|txt] [--thinking] [--no-tools] [--surface] [--images=embed|assets|none] [--save=目录]'
 
 /**
  * Decode export options from a URL query string.
@@ -349,7 +351,10 @@ export function exportBaseName(title, createdAt) {
 
 /** Extension for one format. */
 export function extensionFor(format) {
-  return format === 'md' ? 'md' : format === 'html' ? 'html' : 'zip'
+  if (format === 'md') return 'md'
+  if (format === 'html') return 'html'
+  if (format === 'txt') return 'txt'
+  return 'zip'
 }
 
 /** The single downloadable filename for a format. */
@@ -361,7 +366,17 @@ export function exportFilename(format, title, createdAt) {
 export function contentTypeFor(format) {
   if (format === 'md') return 'text/markdown; charset=utf-8'
   if (format === 'html') return 'text/html; charset=utf-8'
+  if (format === 'txt') return 'text/plain; charset=utf-8'
   return 'application/zip'
+}
+
+/**
+ * Whether a format is plain text and therefore writable through `ctx.fs`.
+ * The host filesystem exposes a text write and no binary write, so a bundle
+ * cannot be saved into a directory.
+ */
+export function isTextFormat(format) {
+  return format === 'md' || format === 'html' || format === 'txt'
 }
 
 /**

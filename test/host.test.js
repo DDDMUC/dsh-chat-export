@@ -196,6 +196,49 @@ describe('the .export route', () => {
     expect(await response.text()).toBe('')
   })
 
+  it('returns plain text with no markup of its own', async () => {
+    resetClock()
+    const { ctx, routes } = stubContext()
+    apply(ctx)
+    const response = await call(routes.get(`${API_PREFIX}.export`), `/x?sessionId=${sessionId}&format=txt`)
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(response.headers.get('content-disposition')).toMatch(/\.txt/)
+    const body = await response.text()
+    expect(body).not.toContain('###')
+    expect(body).not.toContain('<details>')
+    expect(body).toContain('用户 ·')
+  })
+
+  it('saves a plain-text artifact into a directory', async () => {
+    resetClock()
+    const written = []
+    const { ctx, routes } = stubContext({
+      services: {
+        fs: {
+          async resolve(path) {
+            return { targetKey: `key:${path}`, displayPath: path }
+          },
+          async stat() {
+            return undefined
+          },
+          async writeText(target, content) {
+            written.push({ path: target.displayPath, content })
+            return { operation: 'create', version: 'v1' }
+          },
+        },
+      },
+    })
+    apply(ctx)
+    const response = await call(routes.get(`${API_PREFIX}.save`), '/x', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, directory: '/tmp/out', options: { format: 'txt' } }),
+    })
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.path).toMatch(/\.txt$/u)
+    expect(written[0].content).toContain('用户 ·')
+  })
+
   it('returns a self-contained HTML document', async () => {
     resetClock()
     const { ctx, routes } = stubContext()
