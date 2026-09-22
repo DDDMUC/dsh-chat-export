@@ -263,9 +263,13 @@ function toolHtml(entry, context, openTools) {
   const duration = entry.durationMs === null ? '' : ` · ${Math.max(0, entry.durationMs)}ms`
   const failed = entry.result !== null && entry.result.isError
   const out = [`<details class="tool${failed ? ' err' : ''}"${openTools ? ' open' : ''}>`]
-  out.push(`<summary>${failed ? '❌' : '🔧'} <code>${escapeHtml(entry.name)}</code>${escapeHtml(duration)}`)
-  if (entry.result !== null && entry.result.truncated) out.push(` <span style="color:var(--dim)">（已截断）</span>`)
-  out.push('</summary><div class="body">')
+  const tail =
+    entry.result === null
+      ? ''
+      : entry.result.truncated
+        ? ` · 结果已截断（共 ${entry.result.totalChars.toLocaleString('en-US')} 字）`
+        : ` · 结果 ${entry.result.totalLines.toLocaleString('en-US')} 行`
+  out.push(`<summary>${failed ? '❌' : '🔧'} <code>${escapeHtml(entry.name)}</code>${escapeHtml(duration)}${escapeHtml(tail)}</summary><div class="body">`)
   if (entry.arguments !== '') {
     out.push(`<div class="md">${renderMarkdownBody('```json\n' + prettyJson(entry.arguments) + '\n```')}</div>`)
   }

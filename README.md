@@ -101,17 +101,20 @@ Markdown：
 ```markdown
 # AI 写作智能体项目概览
 
+> 由 dsh-chat-export 从 DeepSeek Harness 会话导出
+
+`session-5e6c2afd-…` · `/Users/example/Documents/Default Project`
+
 | 项 | 内容 |
 | --- | --- |
-| 会话 ID | `session-5e6c2afd-…` |
 | 模型 | `deepseek-official/deepseek-flash` · `commandcode/…` |
 | 时间 | 2026-09-21 00:38:16 → 2026-09-21 23:52:12（23h 13m） |
-| 规模 | 116 轮 · 989 步 · 用户 89 条 · 助手 908 条 · 工具调用 876 次 |
+| 规模 | 116 轮 · 989 步 · 用户 89 条 · 助手 908 条 · 876 次工具调用 · 图片 16 张 |
 | 用量 | 输入 1,107,646 · 输出 1,321,824 · 缓存读 310,001,920 · 合计 312,431,390 |
 
 ---
 
-## 回合 1 <sub>27.8s</sub>
+## 回合 1 · 27.8s
 
 ### 🧑 用户 · 00:38:25
 
@@ -128,14 +131,16 @@ Markdown：
 
 </details>
 
-**🔧 工具调用 `bash`** · 1.2s
+<details>
+<summary>🔧 `bash` · 1.2s · 结果 42 行</summary>
+
+**参数**
 
 ```json
 { "command": "ls -la" }
 ```
 
-<details>
-<summary>📄 结果（42 行）</summary>
+**结果**
 
 ```text
 输出……
@@ -145,6 +150,8 @@ Markdown：
 
 ![shot.png](assets/001-shot.png)
 ```
+
+**一次工具调用 = 一行。** 参数和结果都收在同一个折叠里，默认展开的只有「谁在什么时候说了什么」。876 次工具调用的长会话，肉眼可见的就是 876 行 `▶ 🔧 \`名字\` · 耗时 · 结果 N 行`，需要哪次再点开。
 
 文件名：`dsh-chat-<会话标题>-<日期>.<扩展名>`（标题里的路径分隔符与控制字符会被中和，中日韩字符保留）。
 
@@ -211,6 +218,7 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 - **Two entry points** — a labelled "Export transcript" button in the Session header, or the `/export-md` command (which avoids the official `/export`). A typed line presets the dialog, so the two can never disagree.
 - **Three formats** — Markdown, self-contained HTML (printable to PDF), and a ZIP bundle (`transcript.md` + `transcript.html` + `assets/` + `meta.json`).
 - **Complete content** — user and assistant messages, foldable reasoning blocks, foldable tool calls and results with truncation markers, code fences that cannot be broken by the body, image attachments, timestamps, and the Session title, models, and usage.
+- **One tool call is one line.** Arguments and result share a single collapsed disclosure, so what you read by default is who said what and when; open a call only when you need it.
 - **Preview before exporting**, and **two outputs**: a browser download, or a write into a directory through the host filesystem.
 - **Scope choice** — the full log in order, or only what the model can still see.
 - **Attachment de-duplication**, bilingual UI (zh/en), and **zero runtime dependencies**: no `@deepseek-ai/*` imports, a hand-written ZIP writer, and PDF via the browser's own print dialog.

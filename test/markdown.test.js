@@ -110,11 +110,33 @@ describe('renderMarkdown', () => {
     expect(markdown).toContain('# 会话记录')
   })
 
-  it('includes a metadata table with session facts', () => {
-    const { markdown } = render([], { usage: true })
-    expect(markdown).toContain('| 会话 ID |')
-    expect(markdown).toContain('| 工作目录 |')
+  it('keeps the header to a four-row table plus one identity line', () => {
+    const { markdown } = render(
+      [turnStart(0, 1), assistantMessage(1, [text('a')], { usage: { inputTokens: 5, outputTokens: 1 } })],
+      { usage: true },
+    )
+    const dataRows = markdown
+      .split('\n')
+      .filter((line) => line.startsWith('| ') && !line.startsWith('| 项 |') && !line.startsWith('| --- |'))
+    // Model, time, size, usage - and nothing else.
+    expect(dataRows.length).toBeLessThanOrEqual(4)
+    expect(markdown).toContain('| 模型 |')
+    expect(markdown).toContain('| 时间 |')
     expect(markdown).toContain('| 规模 |')
+    // Session identity is a quiet line, not a table row.
+    expect(markdown).toMatch(/^`session-[0-9a-f-]+` · `/mu)
+  })
+
+  it('drops zero-valued usage fields instead of printing zeroes', () => {
+    const events = [
+      turnStart(0, 1),
+      assistantMessage(1, [text('a')], { usage: { inputTokens: 10, outputTokens: 2, cacheWriteTokens: 0, reasoningTokens: 0 } }),
+    ]
+    const { markdown } = render(events, { usage: true })
+    const usageRow = markdown.split('\n').find((line) => line.startsWith('| 用量 |'))
+    expect(usageRow).toContain('输入 10')
+    expect(usageRow).not.toContain('缓存写')
+    expect(usageRow).not.toContain('推理')
   })
 
   it('numbers turns and keeps messages under them', () => {
@@ -130,6 +152,14 @@ describe('renderMarkdown', () => {
     expect(markdown).toContain('## 回合 2')
     expect(markdown.indexOf('第一个问题')).toBeLessThan(markdown.indexOf('第一个回答'))
     expect(markdown.indexOf('第一个回答')).toBeLessThan(markdown.indexOf('第二个问题'))
+  })
+
+  it('prints a turn duration as plain text, never as raw HTML', () => {
+    const events = [turnStart(0, 1), userMessage(1, 'm', [text('hi')]), turnEnd(2, 1)]
+    const { markdown } = render(events, {})
+    expect(markdown).toMatch(/^## 回合 1 · /mu)
+    expect(markdown).not.toContain('<sub>')
+    expect(markdown).not.toContain('</sub>')
   })
 
   it('shows a clock on every message when timestamps are on and none when off', () => {
@@ -150,31 +180,40 @@ describe('renderMarkdown', () => {
     expect(on).toContain('💭 思考')
   })
 
-  it('renders a tool call with pretty arguments and a folded result', () => {
+  it('renders a tool call as ONE collapsed line with arguments and result inside', () => {
     const events = [
       turnStart(0, 1),
       toolCallEvent(1, 'c1', 'read_file', '{"path":"a.js"}'),
       toolResultEvent(2, 'c1', 'line one\nline two'),
     ]
     const { markdown } = render(events, {})
-    expect(markdown).toContain('🔧 工具调用 `read_file`')
-    expect(markdown).toContain('```json')
+    // A single disclosure, not a bold heading plus a separate result block.
+    expect((markdown.match(/<details>/g) ?? []).length).toBe(1)
+    expect(markdown).toMatch(/<summary>🔧 `read_file` · [\d.]+s · 结果 2 行<\/summary>/u)
+    expect(markdown).toContain('**参数**')
+    expect(markdown).toContain('**结果**')
     expect(markdown).toContain('"path": "a.js"')
-    expect(markdown).toContain('📄 结果')
     expect(markdown).toContain('line one')
   })
 
-  it('labels a failed tool result and its truncated size', () => {
+  it('keeps the tool line short so a chatty session still reads as a conversation', () => {
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c1', 'bash', '{"command":"ls"}'), toolResultEvent(2, 'c1', 'ok')]
+    const { markdown } = render(events, {})
+    // Everything a reader scans by default lives on the summary line.
+    const visible = markdown.split('\n').filter((line) => !line.startsWith('|') && line.trim() !== '')
+    expect(visible.filter((line) => line.includes('bash'))).toHaveLength(1)
+  })
+
+  it('labels a failed tool result and its truncated size on the summary line', () => {
     const events = [turnStart(0, 1), toolCallEvent(1, 'c1', 'bash'), toolResultEvent(2, 'c1', 'x'.repeat(9000), { isError: true })]
     const { markdown } = render(events, { toolResultLimit: 100 })
-    expect(markdown).toContain('❌ 结果（出错')
-    expect(markdown).toContain('已截断，共 9,000 字')
+    expect(markdown).toMatch(/<summary>❌ `bash` · [\d.]+s · 结果已截断（共 9,000 字）<\/summary>/u)
   })
 
   it('omits tool blocks when the option is off', () => {
     const events = [turnStart(0, 1), toolCallEvent(1, 'c1', 'bash'), toolResultEvent(2, 'c1', 'out')]
     const { markdown } = render(events, { tools: false })
-    expect(markdown).not.toContain('🔧 工具调用')
+    expect(markdown).not.toContain('`bash`')
     expect(markdown).not.toContain('out')
   })
 

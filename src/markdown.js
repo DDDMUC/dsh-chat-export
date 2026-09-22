@@ -85,13 +85,25 @@ export function attachmentName(ref) {
   return id.length > 24 ? `${id.slice(0, 21)}…` : id
 }
 
-/** The metadata table at the top of the transcript. */
+/**
+ * The header block: a quiet identity line, then a four-row fact table.
+ *
+ * Identifying a session needs its id and working directory; reading one needs
+ * the model, the window, the size, and the cost. The first pair is a footnote
+ * nobody scans twice, so it stays a single dim line; the second pair is a
+ * table. Zero-valued usage fields are dropped rather than printed as zeroes.
+ */
 function renderMeta(transcript) {
   const { meta } = transcript
+  const counts = meta.counts
   const lines = []
+
+  const identity = []
+  if (meta.sessionId !== '') identity.push(`\`${escapeTableCell(meta.sessionId)}\``)
+  if (meta.cwd !== '') identity.push(`\`${escapeTableCell(meta.cwd)}\``)
+  if (identity.length > 0) lines.push(identity.join(' · '), '')
+
   const rows = []
-  if (meta.sessionId !== '') rows.push(['会话 ID', `\`${escapeTableCell(meta.sessionId)}\``])
-  if (meta.cwd !== '') rows.push(['工作目录', `\`${escapeTableCell(meta.cwd)}\``])
   if (meta.models.length > 0) {
     rows.push(['模型', meta.models.map((model) => `\`${escapeTableCell(model)}\``).join(' · ')])
   }
@@ -99,30 +111,23 @@ function renderMeta(transcript) {
     const span = meta.updatedAt > meta.createdAt ? ` → ${formatStamp(meta.updatedAt)}（${formatDuration(meta.updatedAt - meta.createdAt)}）` : ''
     rows.push(['时间', `${formatStamp(meta.createdAt)}${span}`])
   }
-  const counts = meta.counts
-  rows.push([
-    '规模',
-    `${formatNumber(counts.turns)} 轮 · ${formatNumber(counts.steps)} 步 · 用户 ${formatNumber(counts.humanMessages)} 条 · 助手 ${formatNumber(counts.assistantMessages)} 条 · 工具调用 ${formatNumber(counts.toolCalls)} 次`,
-  ])
-  if (meta.options.thinking) rows.push(['思考块', `${formatNumber(counts.reasoningBlocks)} 段`])
-  const extra = []
-  if (counts.images > 0) extra.push(`图片 ${formatNumber(counts.images)} 张`)
-  if (counts.files > 0) extra.push(`文件 ${formatNumber(counts.files)} 个`)
-  if (counts.injectedMessages > 0) extra.push(`注入消息 ${formatNumber(counts.injectedMessages)} 条`)
-  if (extra.length > 0) rows.push(['附件', extra.join(' · ')])
+  const size = [`${formatNumber(counts.turns)} 轮`, `${formatNumber(counts.steps)} 步`, `${formatNumber(counts.toolCalls)} 次工具调用`]
+  if (counts.humanMessages > 0) size.splice(2, 0, `用户 ${formatNumber(counts.humanMessages)} 条`)
+  if (counts.assistantMessages > 0) size.splice(3, 0, `助手 ${formatNumber(counts.assistantMessages)} 条`)
+  if (counts.images > 0) size.push(`图片 ${formatNumber(counts.images)} 张`)
+  if (meta.options.thinking && counts.reasoningBlocks > 0) size.push(`思考 ${formatNumber(counts.reasoningBlocks)} 段`)
+  if (counts.injectedMessages > 0) size.push(`注入 ${formatNumber(counts.injectedMessages)} 条`)
+  rows.push(['规模', size.join(' · ')])
   if (meta.options.usage && meta.usage.reportedSteps > 0) {
     const usage = meta.usage
-    const parts = [
-      `输入 ${formatNumber(usage.inputTokens)}`,
-      `输出 ${formatNumber(usage.outputTokens)}`,
-      `缓存读 ${formatNumber(usage.cacheReadTokens)}`,
-      `缓存写 ${formatNumber(usage.cacheWriteTokens)}`,
-      `推理 ${formatNumber(usage.reasoningTokens)}`,
-      `合计 ${formatNumber(usage.totalTokens)}`,
-    ]
-    rows.push(['用量', `${parts.join(' · ')}（${formatNumber(usage.reportedSteps)} 步上报）`])
+    const parts = [`输入 ${formatNumber(usage.inputTokens)}`, `输出 ${formatNumber(usage.outputTokens)}`]
+    if (usage.cacheReadTokens > 0) parts.push(`缓存读 ${formatNumber(usage.cacheReadTokens)}`)
+    if (usage.cacheWriteTokens > 0) parts.push(`缓存写 ${formatNumber(usage.cacheWriteTokens)}`)
+    if (usage.reasoningTokens > 0) parts.push(`推理 ${formatNumber(usage.reasoningTokens)}`)
+    parts.push(`合计 ${formatNumber(usage.totalTokens)}`)
+    rows.push(['用量', parts.join(' · ')])
   }
-  if (meta.scope === 'surface') rows.push(['范围', '仅当前模型上下文（已被压缩/删除的历史不含在内）'])
+  if (meta.scope === 'surface') rows.push(['范围', '仅当前模型上下文'])
 
   if (rows.length === 0) return lines
   lines.push('| 项 | 内容 |', '| --- | --- |')
@@ -209,24 +214,43 @@ function renderParts(parts, context) {
   return blocks
 }
 
-/** Render one tool entry. */
-function renderTool(entry, context) {
-  const blocks = []
+/** The one-line label for a tool entry, used as its disclosure summary. */
+export function toolSummary(entry) {
+  const bits = [entry.result !== null && entry.result.isError ? '❌' : '🔧', `\`${entry.name}\``]
   const duration = formatDuration(entry.durationMs)
-  const suffix = duration === '' ? '' : ` · ${duration}`
-  blocks.push(`**🔧 工具调用 \`${entry.name}\`**${suffix}`)
+  if (duration !== '') bits.push(`· ${duration}`)
+  const result = entry.result
+  if (result !== null) {
+    if (result.truncated) bits.push(`· 结果已截断（共 ${formatNumber(result.totalChars)} 字）`)
+    else bits.push(`· 结果 ${formatNumber(result.totalLines)} 行`)
+  }
+  return bits.join(' ')
+}
+
+/**
+ * Render one tool entry as a single collapsed line.
+ *
+ * Arguments and result both live inside the disclosure: a coding session is
+ * hundreds of tool calls, and printing each one's JSON inline turns a
+ * transcript into a log. Collapsed, the conversation reads as a conversation
+ * and any call can still be opened in full.
+ */
+function renderTool(entry, context) {
+  const inner = []
   if (entry.arguments !== '') {
     const pretty = context.prettyJson === false ? entry.arguments : prettyJson(entry.arguments)
-    blocks.push(fence(pretty, 'json'))
+    inner.push('**参数**', '', fence(pretty, 'json'))
   }
   if (entry.result !== null) {
-    const result = entry.result
-    const manual = result.truncated ? `已截断，共 ${formatNumber(result.totalChars)} 字 / ${formatNumber(result.totalLines)} 行` : `${formatNumber(result.totalLines)} 行`
-    const summary = result.isError ? `❌ 结果（出错 · ${manual}）` : `📄 结果（${manual}）`
-    const body = result.text === '' ? '（无文本输出）' : result.text
-    blocks.push(`<details>\n<summary>${summary}</summary>\n\n${fence(body, 'text')}\n\n</details>`)
-    for (const ref of result.images ?? []) blocks.push(renderImage({ type: 'image', ref }, context))
+    if (inner.length > 0) inner.push('')
+    const body = entry.result.text === '' ? '（无文本输出）' : entry.result.text
+    inner.push('**结果**', '', fence(body, 'text'))
   }
+
+  const blocks = []
+  if (inner.length === 0) blocks.push(`**${toolSummary(entry)}**`)
+  else blocks.push(`<details>\n<summary>${toolSummary(entry)}</summary>\n\n${inner.join('\n')}\n\n</details>`)
+  for (const ref of entry.result?.images ?? []) blocks.push(renderImage({ type: 'image', ref }, context))
   return blocks
 }
 

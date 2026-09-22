@@ -292,6 +292,7 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
   let updatedAt = header !== undefined && typeof header.createdAt === 'number' ? header.createdAt : 0
   let currentTurn = null
   let turnEntry = null
+  let retriesInTurn = 0
   const stepStarts = new Map()
 
   const note = (event, text, level = 'info') => {
@@ -388,6 +389,10 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
 
     if (event.type === 'turn/end') {
       const reason = data?.reason !== null && typeof data?.reason === 'object' ? String(data.reason.kind ?? '') : ''
+      if (retriesInTurn > 0) {
+        note(event, `本回合模型请求重试 ${retriesInTurn} 次`, 'warn')
+        retriesInTurn = 0
+      }
       if (turnEntry !== null && turnEntry.endSeq === null) {
         turnEntry.endSeq = event.seq
         turnEntry.durationMs = time - turnEntry.at
@@ -598,8 +603,9 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
       continue
     }
     if (event.type === 'llm/retry') {
-      const attempt = data?.retry === undefined ? '' : `（第 ${Number(data.retry) + 1} 次）`
-      note(event, `模型请求重试${attempt}`, 'warn')
+      // Counted, not printed: a flaky provider turns one bad minute into
+      // dozens of identical lines. The turn gets a single summary instead.
+      retriesInTurn += 1
       continue
     }
     if (event.type === 'model/selection' && typeof data?.model === 'string') {
