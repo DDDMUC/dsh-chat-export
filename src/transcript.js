@@ -344,6 +344,7 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
   }
 
   const pushUserEntry = (event, message, human) => {
+    if (options.userInput === false) return
     const id = typeof message.id === 'string' ? message.id : undefined
     if (id !== undefined) {
       // Surface mode drops what the model can no longer see, whichever route
@@ -479,6 +480,7 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
 
     if (event.type === 'assistant/message') {
       if (droppedBySurface(event)) continue
+      if (options.modelOutput === false) continue
       const message = data?.message ?? {}
       const parts = partsOfContent(message.content, options, attachmentSink)
       const messageUsage = data?.usage
