@@ -186,7 +186,7 @@ describe('renderMarkdown', () => {
       toolCallEvent(1, 'c1', 'read_file', '{"path":"a.js"}'),
       toolResultEvent(2, 'c1', 'line one\nline two'),
     ]
-    const { markdown } = render(events, {})
+    const { markdown } = render(events, { tools: true,})
     // A single disclosure, not a bold heading plus a separate result block.
     expect((markdown.match(/<details>/g) ?? []).length).toBe(1)
     expect(markdown).toMatch(/<summary>`read_file` · [\d.]+s · 结果 2 行<\/summary>/u)
@@ -198,7 +198,7 @@ describe('renderMarkdown', () => {
 
   it('keeps the tool line short so a chatty session still reads as a conversation', () => {
     const events = [turnStart(0, 1), toolCallEvent(1, 'c1', 'bash', '{"command":"ls"}'), toolResultEvent(2, 'c1', 'ok')]
-    const { markdown } = render(events, {})
+    const { markdown } = render(events, { tools: true,})
     // Everything a reader scans by default lives on the summary line.
     const visible = markdown.split('\n').filter((line) => !line.startsWith('|') && line.trim() !== '')
     expect(visible.filter((line) => line.includes('bash'))).toHaveLength(1)
@@ -206,7 +206,7 @@ describe('renderMarkdown', () => {
 
   it('labels a failed tool result and its truncated size on the summary line', () => {
     const events = [turnStart(0, 1), toolCallEvent(1, 'c1', 'bash'), toolResultEvent(2, 'c1', 'x'.repeat(9000), { isError: true })]
-    const { markdown } = render(events, { toolResultLimit: 100 })
+    const { markdown } = render(events, { tools: true, toolResultLimit: 100 })
     expect(markdown).toMatch(/<summary>`bash` · 出错 · [\d.]+s · 结果已截断（共 9,000 字）<\/summary>/u)
   })
 
@@ -234,7 +234,7 @@ describe('renderMarkdown', () => {
   it('never lets a body break out of its fence', () => {
     const hostile = '```\n}; rm -rf /\n```'
     const events = [turnStart(0, 1), toolCallEvent(1, 'c1', 'bash'), toolResultEvent(2, 'c1', hostile)]
-    const { markdown } = render(events, {})
+    const { markdown } = render(events, { tools: true,})
     const body = markdown.slice(markdown.indexOf('````'))
     expect(body.startsWith('````')).toBe(true)
   })

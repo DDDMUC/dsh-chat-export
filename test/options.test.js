@@ -17,18 +17,20 @@ import {
 } from '../src/options.js'
 
 describe('defaultOptions', () => {
-  it('keeps reasoning off and tools on', () => {
+  it('defaults to the conversation: reasoning and system in, tool calls out', () => {
     const options = defaultOptions()
-    expect(options.thinking).toBe(false)
-    expect(options.tools).toBe(true)
+    expect(options.thinking).toBe(true)
+    expect(options.system).toBe(true)
+    expect(options.tools).toBe(false)
+    expect(options.injected).toBe(false)
     expect(options.scope).toBe('full')
     expect(options.format).toBe('md')
   })
 
   it('returns a fresh object each time', () => {
     const first = defaultOptions()
-    first.thinking = true
-    expect(defaultOptions().thinking).toBe(false)
+    first.thinking = false
+    expect(defaultOptions().thinking).toBe(true)
   })
 })
 

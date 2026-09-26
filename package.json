@@ -1,6 +1,6 @@
 {
   "name": "dsh-chat-export",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Readable transcript export for DeepSeek Harness: turn any Session into a Markdown / HTML / ZIP transcript with reasoning blocks, tool calls and results, images and usage — from the Session header or the /export-md command.",
   "type": "module",
   "main": "src/index.js",

@@ -317,7 +317,7 @@ describe('ChatExportController', () => {
     expect(entry.form.format).toBe('html')
     expect(entry.form.thinking).toBe(true)
     // Untouched keys keep their defaults rather than becoming undefined.
-    expect(entry.form.tools).toBe(true)
+    expect(entry.form.tools).toBe(false)
     expect(entry.mode).toBe('save')
     expect(entry.directory).toBe('/tmp/out')
   })
@@ -455,5 +455,33 @@ describe('locale completeness', () => {
     for (const format of ['md', 'html', 'zip', 'txt']) {
       expect(referenced, `format.${format}`).toContain(`format.${format}`)
     }
+  })
+})
+
+describe('default agreement with the host', () => {
+  /** The option keys both sides default, read from the client bundle source. */
+  function clientDefaults(source) {
+    const start = source.indexOf('function defaultForm()')
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, source.indexOf('\n    }', start))
+    return Object.fromEntries(
+      [...body.matchAll(/(\w+):\s*(?:'([^']*)'|(true|false)|(\d+))/gu)].map((m) => [
+        m[1],
+        m[2] ?? (m[3] === undefined ? Number(m[4]) : m[3] === 'true'),
+      ]),
+    )
+  }
+
+  it('defaults every option the same way the host does', async () => {
+    const { defaultOptions } = await import('../src/options.js')
+    const host = defaultOptions()
+    const client = clientDefaults(CLIENT_SOURCE)
+    for (const [key, value] of Object.entries(client)) {
+      // The dialog renders these as initial switch positions, and the host fills
+      // in whatever a request omits, so any disagreement exports something other
+      // than what the user was shown.
+      expect(host[key], key).toBe(value)
+    }
+    expect(Object.keys(client).sort()).toEqual(Object.keys(host).sort())
   })
 })

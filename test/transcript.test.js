@@ -208,14 +208,15 @@ describe('buildTranscript', () => {
     expect(shown.meta.counts.injectedMessages).toBe(1)
   })
 
-  it('excludes system messages unless asked', () => {
+  it('includes system messages by default and drops them when asked', () => {
     resetClock()
     const events = [
       turnStart(0, 1),
       event(1, 'system/message', { turn: 1, step: 1, message: { content: [text('prompt')] } }, { surfaceOp: 'append' }),
     ]
-    expect(buildTranscript(header(), events, options()).entries.some((entry) => entry.kind === 'system')).toBe(false)
-    expect(buildTranscript(header(), events, options({ system: true })).entries.some((entry) => entry.kind === 'system')).toBe(true)
+    const hasSystem = (transcript) => transcript.entries.some((entry) => entry.kind === 'system')
+    expect(hasSystem(buildTranscript(header(), events, options()))).toBe(true)
+    expect(hasSystem(buildTranscript(header(), events, options({ system: false })))).toBe(false)
   })
 
   it('sums usage across assistant messages', () => {

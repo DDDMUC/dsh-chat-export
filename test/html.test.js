@@ -142,7 +142,7 @@ describe('renderHtml', () => {
 
   it('marks a failed tool call', () => {
     const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'bash'), toolResultEvent(2, 'c', 'boom', { isError: true })]
-    const html = render(events, {})
+    const html = render(events, { tools: true })
     expect(html).toContain('<details class="tool err">')
     expect(html).toContain('出错')
   })
