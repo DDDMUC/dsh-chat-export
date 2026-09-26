@@ -1,6 +1,6 @@
 // dsh-chat-export - browser half.
 //
-// One entry point: a labelled capsule in the Session header that opens the
+// One entry point: a share icon in the Session header that opens the
 // export dialog. The `/export-md` command drives the same dialog, so a typed
 // line and the button can never disagree about what will be produced.
 //
@@ -31,14 +31,16 @@ window.__ModuleLoader__.load({
       'action.label': '导出文字稿',
       'action.title': '把当前会话导出成可读文字稿',
       'dialog.title': '导出会话文字稿',
-      'dialog.description': '把当前会话导出成可读的 Markdown、HTML 或打包文件。导出只读会话日志，不修改任何内容。',
+      'dialog.description': '把当前会话导出成可读的 Markdown、HTML、纯文本或打包文件。导出只读会话日志，不修改任何内容。',
       'field.format': '格式',
       'format.md': 'Markdown',
       'format.html': 'HTML',
       'format.zip': 'ZIP 打包',
-      'format.md.hint': '纯文本文字稿，适合归档与再编辑',
+      'format.txt': '纯文本',
+      'format.md.hint': '带标记的文字稿，标题与折叠都交给阅读器渲染',
       'format.html.hint': '自包含单文件，可直接打印或另存为 PDF',
-      'format.zip.hint': 'Markdown + HTML + 图片素材，全部装进一个压缩包',
+      'format.zip.hint': 'Markdown + HTML + 纯文本 + 图片素材，全部装进一个压缩包',
+      'format.txt.hint': '不带任何标记，结构与层级全靠分隔线和缩进',
       'field.scope': '范围',
       'scope.full': '完整日志',
       'scope.surface': '仅当前上下文',
@@ -81,14 +83,16 @@ window.__ModuleLoader__.load({
       'action.label': 'Export transcript',
       'action.title': 'Export this session as a readable transcript',
       'dialog.title': 'Export session transcript',
-      'dialog.description': 'Export this session as a readable Markdown file, a self-contained HTML page, or a bundle. Export only reads the session log.',
+      'dialog.description': 'Export this session as a readable Markdown file, a self-contained HTML page, plain text, or a bundle. Export only reads the session log.',
       'field.format': 'Format',
       'format.md': 'Markdown',
       'format.html': 'HTML',
       'format.zip': 'ZIP bundle',
-      'format.md.hint': 'Plain-text transcript, good for archiving and editing',
+      'format.txt': 'Plain text',
+      'format.md.hint': 'A marked-up transcript; headings and folds are left to your reader',
       'format.html.hint': 'One self-contained file, ready to print or save as PDF',
-      'format.zip.hint': 'Markdown, HTML, and every image in one archive',
+      'format.zip.hint': 'Markdown, HTML, plain text, and every image in one archive',
+      'format.txt.hint': 'No markers at all; structure comes from rules and indentation',
       'field.scope': 'Scope',
       'scope.full': 'Full log',
       'scope.surface': 'Current context',
@@ -130,12 +134,10 @@ window.__ModuleLoader__.load({
     // --- style ----------------------------------------------------------------
 
     const CSS = [
-      '.dshce-button{display:inline-flex;align-items:center;gap:5px;height:32px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.28));border-radius:18px;background:transparent;color:var(--dsw-alias-label-primary,inherit);font-family:var(--dsw-font-family,inherit);font-size:13px;font-weight:400;line-height:20px;cursor:pointer}',
-      '.dshce-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12))}',
-      '.dshce-button:focus-visible{outline:2px solid var(--dsw-alias-button-primary-fill,#4d6bfe);outline-offset:2px}',
-      '.dshce-button:disabled{color:var(--dsw-alias-label-dimmed,rgba(127,127,127,.6));cursor:progress}',
-      '.dshce-button svg{flex:none}',
-      '.dshce-button span{white-space:nowrap}',
+      // Square icon button, sized exactly like the harness's own Session-header
+      // icon button so the two sit in one row without looking mismatched.
+      '.dshce-header-action{width:28px;flex:none;padding:0;color:var(--dsw-alias-label-secondary,inherit)}',
+      '.dshce-header-action svg{width:15px;height:15px}',
       '.dshce-group{margin:0 0 18px}',
       '.dshce-group:last-child{margin-bottom:0}',
       '.dshce-group-title{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,inherit)}',
@@ -601,17 +603,17 @@ window.__ModuleLoader__.load({
       const notice = entry.notice
       return jsxs(Fragment, {
         children: [
-          jsxs('button', {
-            type: 'button',
-            className: 'dshce-button',
+          jsx(primitives.Button, {
+            size: 'sm',
+            className: 'dshce-header-action',
             disabled: entry.busy,
             'aria-busy': entry.busy === true,
+            // The icon carries no text, so the accessible name and the tooltip
+            // are the only things naming the action.
+            'aria-label': t('action.label'),
             title: t('action.title'),
             onClick: () => controller.open(sessionId),
-            children: [
-              jsx(primitives.IconListPenOutline16, { key: 'icon', size: 13 }),
-              jsx('span', { key: 'label', children: t('action.label') }),
-            ],
+            children: jsx(primitives.IconShareOutlineRegular, {}),
           }),
           jsx(ExportDialog, { sessionId, entry, controller, t }),
           notice === null || notice === undefined

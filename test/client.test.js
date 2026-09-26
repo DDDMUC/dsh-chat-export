@@ -77,7 +77,7 @@ async function loadClient() {
       Switch: 'Switch',
       Input: 'Input',
       Toast: 'Toast',
-      IconListPenOutline16: 'IconListPenOutline16',
+      IconShareOutlineRegular: 'IconShareOutlineRegular',
     },
     '@deepseek-ai/dsh-client-store': { createSnapshotStore },
   }
@@ -119,8 +119,8 @@ function stubCtx() {
           slots.push({ name, registration: factory() })
           return () => {}
         },
-        register(descriptor) {
-          registrations.push(descriptor)
+        register(descriptor, component) {
+          registrations.push({ ...descriptor, component })
           return () => {}
         },
       },
@@ -164,7 +164,7 @@ describe('client bundle shape', () => {
     expect(styles).toHaveLength(1)
     expect(styles[0].dataset.plugin).toBe('dsh-chat-export')
     expect(styles[0].dataset.pluginCss).toContain('dsh-chat-export')
-    expect(styles[0].textContent).toContain('.dshce-button')
+    expect(styles[0].textContent).toContain('.dshce-header-action')
   })
 
   it('requires the client store, not the removed client-runtime shim', async () => {
@@ -361,5 +361,99 @@ describe('ChatExportController', () => {
     expect(controller.entryOf('s1').notice).toBeNull()
     controller.dispose()
     expect(controller.store.getSnapshot().bySession).toEqual({})
+  })
+})
+
+describe('the Session-header entry point', () => {
+  /** Render the registered HeaderAction with plain fakes (no React needed). */
+  async function renderHeaderAction() {
+    const { exports } = await loadClient()
+    const { ctx, registrations } = stubCtx()
+    exports.apply(ctx)
+    const { component } = registrations[0]
+    expect(typeof component).toBe('function')
+    const tree = component({
+      sessionId: 'session-1',
+      useChatExport: (select) => select({ bySession: {} }),
+      controller: { open: () => {}, clearNotice: () => {} },
+      t: (key) => key,
+    })
+    return tree.children[0]
+  }
+
+  it('renders as the harness Button primitive, not a raw button', async () => {
+    const button = await renderHeaderAction()
+    // Using the primitive is what keeps this visually identical to the
+    // harness's own header icon button next to it.
+    expect(button.type).toBe('Button')
+  })
+
+  it('carries the share icon and no visible text label', async () => {
+    const button = await renderHeaderAction()
+    expect(button.children.type).toBe('IconShareOutlineRegular')
+    // The label survives only as the accessible name and the tooltip; a text
+    // child here would turn the square icon button back into a labelled pill.
+    expect(button.props['aria-label']).toBe('action.label')
+    expect(button.props.title).toBe('action.title')
+    const textChildren = [button.children].flat().filter((child) => typeof child === 'string')
+    expect(textChildren).toEqual([])
+  })
+
+  it('sizes itself like the harness icon button', async () => {
+    const button = await renderHeaderAction()
+    expect(button.props.size).toBe('sm')
+    expect(button.props.className).toBe('dshce-header-action')
+  })
+})
+
+describe('locale completeness', () => {
+  /**
+   * Keys the dialog can ask for: `label`/`hint`/`labelKey` in a choice or row
+   * definition, plus every direct `t('...')` call.
+   */
+  function referencedKeys(source) {
+    const keys = new Set()
+    for (const match of source.matchAll(/(?:label|hint|labelKey):\s*'([a-z][A-Za-z0-9.]*)'/gu)) keys.add(match[1])
+    for (const match of source.matchAll(/\bt\('([a-z][A-Za-z0-9.]*)'/gu)) keys.add(match[1])
+    return [...keys].sort()
+  }
+
+  /** The `zh` / `en` dictionaries as written in the bundle source. */
+  function dictionaries(source) {
+    const out = {}
+    for (const locale of ['zh', 'en']) {
+      const start = source.indexOf(`const ${locale} = {`)
+      expect(start, `${locale} dictionary`).toBeGreaterThan(-1)
+      const end = source.indexOf('\n    }', start)
+      const body = source.slice(start, end)
+      out[locale] = new Set([...body.matchAll(/'([^']+)':/gu)].map((match) => match[1]))
+    }
+    return out
+  }
+
+  it('defines every key the dialog asks for, in both languages', () => {
+    const dicts = dictionaries(CLIENT_SOURCE)
+    const missing = []
+    for (const key of referencedKeys(CLIENT_SOURCE)) {
+      for (const locale of ['zh', 'en']) {
+        if (!dicts[locale].has(key)) missing.push(`${locale}: ${key}`)
+      }
+    }
+    // A key that resolves to itself renders as the raw dotted string in the UI,
+    // which is how 'format.txt' shipped as a visible label once.
+    expect(missing).toEqual([])
+  })
+
+  it('carries a plain-text entry in both languages', () => {
+    const dicts = dictionaries(CLIENT_SOURCE)
+    expect(dicts.zh.has('format.txt')).toBe(true)
+    expect(dicts.en.has('format.txt')).toBe(true)
+  })
+
+  it('gives every format pill its own label and hint', () => {
+    const referenced = referencedKeys(CLIENT_SOURCE)
+    for (const format of ['md', 'html', 'zip', 'txt']) {
+      expect(referenced, `format.${format}`).toContain(`format.${format}`)
+    }
   })
 })
