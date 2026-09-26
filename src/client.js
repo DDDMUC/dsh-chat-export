@@ -162,13 +162,21 @@ window.__ModuleLoader__.load({
 
     // --- state ----------------------------------------------------------------
 
-    /** Export options the dialog owns; the host applies the same defaults. */
+    /**
+     * Export options the dialog owns.
+     *
+     * These MUST match `defaultOptions()` in src/options.js: the dialog renders
+     * them as the initial switch positions, and the host fills in anything the
+     * request leaves out, so a disagreement shows the user one thing and exports
+     * another. The two bundles cannot import each other, so a test compares them
+     * instead of trusting the comment.
+     */
     function defaultForm() {
       return {
         format: 'md',
-        thinking: false,
-        tools: true,
-        system: false,
+        thinking: true,
+        tools: false,
+        system: true,
         injected: false,
         timestamps: true,
         usage: true,

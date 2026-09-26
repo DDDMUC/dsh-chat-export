@@ -92,7 +92,7 @@ describe('renderText', () => {
       toolCallEvent(1, 'c1', 'bash', '{"command":"ls"}'),
       toolResultEvent(2, 'c1', 'file.txt'),
     ]
-    const body = render(events)
+    const body = render(events, { tools: true })
     expect(body).toContain('[工具] bash')
     expect(body).toContain('参数  {')
     expect(body).toContain('"command": "ls"')
@@ -101,7 +101,7 @@ describe('renderText', () => {
 
   it('marks a failed tool call in words, not with a symbol', () => {
     const events = [turnStart(0, 1), toolCallEvent(1, 'c1', 'bash'), toolResultEvent(2, 'c1', 'boom', { isError: true })]
-    expect(render(events)).toContain('bash · 出错')
+    expect(render(events, { tools: true })).toContain('bash · 出错')
   })
 
   it('describes an image rather than inlining it', () => {
@@ -149,7 +149,7 @@ describe('renderText', () => {
 
   it('renders the whole sample session without losing a message', () => {
     const { header: sessionHeader, events } = sampleSession()
-    const transcript = buildTranscript(sessionHeader, events, { ...defaultOptions(), thinking: true, injected: true, system: true })
+    const transcript = buildTranscript(sessionHeader, events, { ...defaultOptions(), tools: true })
     const body = renderText(transcript)
     expect(body).toContain('只有 spliced 里有这条')
     expect(body).toContain('帮我改一下这个函数')
