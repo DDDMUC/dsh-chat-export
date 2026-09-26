@@ -48,6 +48,24 @@ function sessionDir(id) {
   return undefined
 }
 
+/**
+ * The newest session generation present in a directory.
+ *
+ * A session directory can hold several generations at once after a format
+ * upgrade (`session.v3.jsonl.zstd` next to `session.v4.jsonl.zstd`), and the
+ * newest one is the one that carries every event: the older is the pre-migration
+ * snapshot. Returns undefined when the directory holds none.
+ */
+function newestGeneration(dir) {
+  const present = readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => /^session\.(v\d+)\.jsonl\.zstd$/u.exec(entry.name))
+    .filter((match) => match !== null)
+    .map((match) => ({ version: Number(match[1]), name: match[0] }))
+    .sort((left, right) => right.version - left.version)
+  return present.length === 0 ? undefined : join(dir, present[0].name)
+}
+
 /** Read one image straight out of the content-addressed attachment store. */
 async function loadImage(ref) {
   const hex = String(ref.attachmentId).replace(/^sha256:/u, '')
@@ -68,7 +86,7 @@ for (const { label, id } of SESSIONS) {
     console.log(`跳过 ${label}（找不到 ${id}）`)
     continue
   }
-  const rows = decodeSessionArtifact(readFileSync(join(dir, 'session.v3.jsonl.zstd')))
+  const rows = decodeSessionArtifact(readFileSync(newestGeneration(dir)))
     .split('\n')
     .filter((line) => line !== '')
     .map((line) => JSON.parse(line))
