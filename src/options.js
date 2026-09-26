@@ -38,10 +38,13 @@ const HUMAN_SOURCE_KINDS = new Set(['user', undefined, null])
 export function defaultOptions() {
   return {
     format: 'md',
-    // The default export is the conversation itself: what the user said, what
-    // the model said, what it thought, and what the system told it. Tool calls
-    // are the loudest part of a log and the least useful when reading back, so
-    // they are opt-in; usage and timestamps stay because they are one line each.
+    // The default export is the conversation itself, and these four are it:
+    // what the user said, what the model said, what it thought, and what the
+    // system told it. Tool calls are the loudest part of a log and the least
+    // useful when reading back, so they are opt-in; usage and timestamps stay
+    // because they are one line each.
+    userInput: true,
+    modelOutput: true,
     thinking: true,
     tools: false,
     system: true,
@@ -56,6 +59,8 @@ export function defaultOptions() {
 
 /** Flag spellings accepted on the command line, mapped to their option key. */
 const BOOLEAN_FLAGS = {
+  input: 'userInput',
+  output: 'modelOutput',
   thinking: 'thinking',
   tools: 'tools',
   system: 'system',
@@ -219,7 +224,7 @@ function exampleValueFor(name) {
 
 /** Human-facing help line advertised through `input.hint` and the dialog. */
 export const COMMAND_HINT =
-  '[md|html|zip|txt] [--tools] [--no-thinking] [--injected] [--no-system] [--surface] [--images=embed|assets|none] [--save=目录]'
+  '[md|html|zip|txt] [--tools] [--no-thinking] [--injected] [--no-input] [--no-output] [--no-system] [--surface] [--images=embed|assets|none] [--save=目录]'
 
 /**
  * Decode export options from a URL query string.
