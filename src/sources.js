@@ -21,6 +21,7 @@
 // the official behaviour - it is the only thing that still answers at all.
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { decodeSessionArtifact } from './zstd.js'
@@ -71,6 +72,30 @@ export function newestGeneration(dir) {
     }
   }
   return best === undefined ? undefined : join(dir, best)
+}
+
+/**
+ * The DeepSeek Harness home, mirroring the harness's own resolution.
+ *
+ * `DSH_HOME` wins when set (a `~` prefix is expanded), and `~/.dsh` is the
+ * default. The sessions root is derived from it exactly as
+ * `dshHomePath('sessions')` derives it, so a machine that relocates its home
+ * gets the artifact fallback in the right place too.
+ *
+ * @param env - the environment to read (defaults to `process.env`; injectable
+ *   so callers and tests do not have to mutate the real environment).
+ * @returns the resolved absolute home path.
+ */
+export function dshHome(env = process.env) {
+  const fromEnv = env.DSH_HOME
+  // A literal "undefined" or "null" string is treated as unset: shells and
+  // wrappers set those by accident, and following them would hide every session
+  // behind a nonexistent directory.
+  const usable = fromEnv !== undefined && !/^(?:undefined|null)$/iu.test(fromEnv.trim()) && fromEnv.trim().length > 0
+  const configured = usable ? fromEnv : join(homedir(), '.dsh')
+  if (configured === '~') return homedir()
+  if (configured.startsWith('~/') || configured.startsWith('~\\')) return join(homedir(), configured.slice(2))
+  return resolve(configured)
 }
 
 /** Extension for one image media type. */
@@ -175,7 +200,7 @@ export async function readSessionLog(services, sessionId, signal, readOptions = 
  */
 export function readArtifactDirectly(sessionId, signal, options = {}) {
   signal?.throwIfAborted()
-  const root = options.root ?? join(homedir(), '.dsh', 'sessions')
+  const root = options.root ?? join(dshHome(), 'sessions')
   if (!existsSync(root)) return undefined
   for (const project of readdirSync(root, { withFileTypes: true })) {
     if (!project.isDirectory()) continue

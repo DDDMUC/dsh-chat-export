@@ -1,9 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync, constants } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { newestGeneration, readArtifactDirectly } from '../src/sources.js'
+import { dshHome, newestGeneration, readArtifactDirectly } from '../src/sources.js'
 
 /** One checksummed Zstandard frame, the way persistence writes them. */
 function frame(line) {
@@ -72,5 +72,32 @@ describe('readArtifactDirectly', () => {
 
   it('returns undefined for a session that is not on disk', () => {
     expect(readArtifactDirectly('session-00000000-0000-0000-0000-000000000000')).toBeUndefined()
+  })
+})
+
+describe('dshHome', () => {
+  const home = join(homedir(), '.dsh')
+
+  it('falls back to ~/.dsh for every unusable spelling', () => {
+    for (const value of [undefined, '', '   ', 'undefined', 'null', 'UNDEFINED', 'Null']) {
+      expect(dshHome({ DSH_HOME: value }), String(value)).toBe(home)
+    }
+  })
+
+  it('honours an explicit home', () => {
+    expect(dshHome({ DSH_HOME: '/tmp/custom-dsh' })).toBe('/tmp/custom-dsh')
+  })
+
+  it('expands a tilde prefix', () => {
+    expect(dshHome({ DSH_HOME: '~/alt-dsh' })).toBe(join(homedir(), 'alt-dsh'))
+    expect(dshHome({ DSH_HOME: '~' })).toBe(homedir())
+  })
+
+  it('makes sessions a child of the resolved home', () => {
+    expect(join(dshHome({ DSH_HOME: '/tmp/custom-dsh' }), 'sessions')).toBe('/tmp/custom-dsh/sessions')
+  })
+
+  it('reads the real environment when none is injected', () => {
+    expect(dshHome()).toBe(join(dshHome(process.env)))
   })
 })
