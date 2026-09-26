@@ -303,6 +303,50 @@ describe('buildTranscript', () => {
     expect(textsOf(surface)).toContain('压缩后继续')
   })
 
+  it('keeps a compacted prompt out of the surface even when the inbox still carries it', () => {
+    resetClock()
+    // The inbox records a prompt before the boundary it belongs to, and the
+    // prompt then lands as its own `user/message`. Compaction shadows the
+    // event, but the spliced record carries no surface op of its own - so
+    // without an id-level check the prompt comes straight back.
+    const events = [
+      turnStart(0, 1),
+      spliced(1, [insertedMessage('a', [text('原始提问')])]),
+      userMessage(2, 'a', [text('原始提问')]),
+      assistantMessage(3, [text('原始回答')]),
+      userMessage(4, 'summary', [text('压缩后的摘要')], { kind: 'plugin', plugin: 'compaction' }),
+      turnStart(5, 2),
+      assistantMessage(6, [text('压缩后继续')]),
+    ]
+    // Both anchors must be surface nodes: the spliced record at seq 1 carries no
+    // surface op, so a window starting there would be skipped defensively.
+    events[4].surfaceOp = { op: 'replace', startSeq: 2, endSeq: 3 }
+    const textsOf = (transcript) =>
+      transcript.entries
+        .filter((entry) => entry.kind === 'user' || entry.kind === 'assistant')
+        .flatMap((entry) => entry.parts.map((part) => part.text))
+    const full = buildTranscript(header(), events, options({ scope: 'full', injected: true }))
+    const surface = buildTranscript(header(), events, options({ scope: 'surface', injected: true }))
+    expect(textsOf(full)).toContain('原始提问')
+    expect(textsOf(surface)).not.toContain('原始提问')
+    expect(textsOf(surface)).toContain('压缩后的摘要')
+    expect(textsOf(surface)).toContain('压缩后继续')
+  })
+
+  it('still surfaces a spliced prompt that compaction left alone', () => {
+    resetClock()
+    const events = [
+      turnStart(0, 1),
+      spliced(1, [insertedMessage('a', [text('保留的提问')])]),
+      userMessage(2, 'a', [text('保留的提问')]),
+      turnStart(3, 2),
+      assistantMessage(4, [text('回答')]),
+    ]
+    const surface = buildTranscript(header(), events, options({ scope: 'surface' }))
+    const texts = surface.entries.filter((entry) => entry.kind === 'user').flatMap((entry) => entry.parts.map((part) => part.text))
+    expect(texts).toContain('保留的提问')
+  })
+
   it('counts every distinct attachment once and reports its reference', () => {
     resetClock()
     const shared = image('sha256:same', { name: 'same.png' })
