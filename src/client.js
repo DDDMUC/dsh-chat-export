@@ -52,9 +52,11 @@ window.__ModuleLoader__.load({
       'images.none': '不导出',
       'images.auto.hint': '单文件内嵌，ZIP 里放 assets 目录',
       'field.content': '内容',
-      'content.thinking': '思考块',
+      'content.userInput': '用户输入',
+      'content.modelOutput': '模型输出',
+      'content.thinking': '思维链',
       'content.tools': '工具调用与结果',
-      'content.system': '系统提示',
+      'content.system': '系统提示词',
       'content.injected': '注入内容',
       'content.timestamps': '时间戳',
       'content.usage': '用量统计',
@@ -104,6 +106,8 @@ window.__ModuleLoader__.load({
       'images.none': 'Skip',
       'images.auto.hint': 'Embedded in a single file, an assets folder inside a ZIP',
       'field.content': 'Content',
+      'content.userInput': 'User input',
+      'content.modelOutput': 'Model output',
       'content.thinking': 'Reasoning',
       'content.tools': 'Tool calls and results',
       'content.system': 'System prompts',
@@ -174,6 +178,8 @@ window.__ModuleLoader__.load({
     function defaultForm() {
       return {
         format: 'md',
+        userInput: true,
+        modelOutput: true,
         thinking: true,
         tools: false,
         system: true,
@@ -550,9 +556,12 @@ window.__ModuleLoader__.load({
                 jsxs('div', {
                   className: 'dshce-switches',
                   children: [
+                    // The four that are the conversation, in reading order.
+                    jsx(SwitchRow, { t, labelKey: 'content.userInput', checked: form.userInput, onChange: (v) => set('userInput', v) }),
+                    jsx(SwitchRow, { t, labelKey: 'content.modelOutput', checked: form.modelOutput, onChange: (v) => set('modelOutput', v) }),
                     jsx(SwitchRow, { t, labelKey: 'content.thinking', checked: form.thinking, onChange: (v) => set('thinking', v) }),
-                    jsx(SwitchRow, { t, labelKey: 'content.tools', checked: form.tools, onChange: (v) => set('tools', v) }),
                     jsx(SwitchRow, { t, labelKey: 'content.system', checked: form.system, onChange: (v) => set('system', v) }),
+                    jsx(SwitchRow, { t, labelKey: 'content.tools', checked: form.tools, onChange: (v) => set('tools', v) }),
                     jsx(SwitchRow, { t, labelKey: 'content.injected', checked: form.injected, onChange: (v) => set('injected', v) }),
                     jsx(SwitchRow, { t, labelKey: 'content.timestamps', checked: form.timestamps, onChange: (v) => set('timestamps', v) }),
                     jsx(SwitchRow, { t, labelKey: 'content.usage', checked: form.usage, onChange: (v) => set('usage', v) }),

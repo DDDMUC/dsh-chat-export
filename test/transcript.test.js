@@ -208,6 +208,25 @@ describe('buildTranscript', () => {
     expect(shown.meta.counts.injectedMessages).toBe(1)
   })
 
+  it('always carries user input and model output unless switched off', () => {
+    resetClock()
+    const events = [turnStart(0, 1), userMessage(1, 'a', [text('提问')]), assistantMessage(2, [text('回答')])]
+    const kinds = (transcript) => transcript.entries.map((entry) => entry.kind)
+    // Both are on by default, so the default export is the conversation.
+    expect(kinds(buildTranscript(header(), events, options()))).toEqual(['turn', 'user', 'assistant'])
+    expect(kinds(buildTranscript(header(), events, options({ userInput: false })))).toEqual(['turn', 'assistant'])
+    expect(kinds(buildTranscript(header(), events, options({ modelOutput: false })))).toEqual(['turn', 'user'])
+    expect(kinds(buildTranscript(header(), events, options({ userInput: false, modelOutput: false })))).toEqual(['turn'])
+  })
+
+  it('leaves the counts honest when a side is switched off', () => {
+    resetClock()
+    const events = [turnStart(0, 1), userMessage(1, 'a', [text('提问')]), assistantMessage(2, [text('回答')])]
+    const only = buildTranscript(header(), events, options({ userInput: false }))
+    expect(only.meta.counts.humanMessages).toBe(0)
+    expect(only.meta.counts.assistantMessages).toBe(1)
+  })
+
   it('includes system messages by default and drops them when asked', () => {
     resetClock()
     const events = [
