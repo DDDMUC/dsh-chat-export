@@ -10,10 +10,10 @@
 
 <div align="center">
   <a href="https://raw.githubusercontent.com/DDDMUC/dsh-chat-export/main/docs/screenshots/01-header-button.png">
-    <img src="https://raw.githubusercontent.com/DDDMUC/dsh-chat-export/main/docs/screenshots/01-header-button.png" alt="会话头部的「导出文字稿」入口" width="820" />
+    <img src="https://raw.githubusercontent.com/DDDMUC/dsh-chat-export/main/docs/screenshots/01-header-button.png" alt="会话头部的导出图标按钮" width="820" />
   </a>
   <br>
-  <sub>▲ 会话头部：自己的「导出文字稿」按钮，紧挨官方的 ⋯ 菜单</sub>
+  <sub>▲ 会话头部：分享图标按钮，紧挨官方的 ⋯ 菜单</sub>
 </div>
 
 ### 为什么需要它
@@ -24,7 +24,7 @@
 
 ### 特性
 
-- **两种入口** —— 会话头部「导出文字稿」按钮，或 `/export-md` 斜杠命令（避开官方的 `/export`）；命令解析出的选项会带进对话框，两边永远不会打架
+- **两种入口** —— 会话头部的分享图标按钮（悬停显示「导出文字稿」），或 `/export-md` 斜杠命令（避开官方的 `/export`）；命令解析出的选项会带进对话框，两边永远不会打架
 - **四种格式** —— Markdown、HTML（单文件、自包含样式、可打印成 PDF）、纯文本（无任何标记，终端/记事本都能读）、ZIP（md + html + txt + 图片素材 + `meta.json`）
 - **内容齐全** —— 用户/助手消息、思考块（可折叠）、工具调用与结果（可折叠、超长自动截断并标注）、代码块（围栏长度自适应，正文里的 ``` 撑不破）、图片附件、时间戳、会话标题 / 模型 / 用量统计
 - **导出前可预览** —— 对话框里点「预览开头」直接看 Markdown 开头
@@ -60,7 +60,7 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 
 ### 使用
 
-**方式一：会话头部按钮**
+**方式一：会话头部图标按钮**
 
 1. 打开一个会话，点头部的「导出文字稿」
 2. 选格式、范围、图片策略，按需要打开思考块 / 系统提示 / 注入内容 / 时间戳 / 用量
@@ -206,7 +206,7 @@ session-48310605-bb1a-4966-a207-380f947e220b
 
 ### 它是怎么工作的
 
-- **数据全部走官方服务**：`ctx.sessionPersistence.open(id, 'read')` 读会话日志（和官方 ZIP 用的是同一个入口，自带多帧 zstd 解码、格式迁移、断尾修复），标题走 `ctx.sessionQuery.readTitle`，图片字节走 `ctx.attachments.readImage`。降级链：`sessionPersistence` → `sessionQuery.readSession` → `readSurface`，全都没有才报 503。
+- **数据全部走官方服务**：`ctx.sessionPersistence.open(id, 'read')` 读会话日志（和官方 ZIP 用的是同一个入口，自带多帧 zstd 解码、格式迁移、断尾修复），标题走 `ctx.sessionQuery.readTitle`，图片字节走 `ctx.attachments.readImage`。降级链：`sessionPersistence` → `sessionQuery.readSession` → `readSurface` → 直接读会话文件（绕过服务层，官方读取器挂掉时仍然能导出），全都没有才报 503。
 - **导出在宿主端做，不在浏览器里做**：浏览器拿到的原始事件只是一个分页窗口（要靠 `loadOlder()` 一页页翻到 `hasMore` 为 false），而且没有附件字节。宿主端一把拿全。
 - **HTTP 走 `ctx.connection.fetch`**：挂在 `/api/dsh-chat-export.*` 下，白拿连接服务的鉴权与 Host/Origin 围栏（未登录 401，跨源 403）。不用 `webServer.register`：它的 exact 路由会盖掉 `/api` 桥接并绕过鉴权。
 - **ZIP 是自己写的**：条目少、结构平，用 `node:zlib` 的 raw deflate 加本地头 + 中央目录 + EOCD 就够了，不值得为它引一个依赖。
@@ -220,7 +220,7 @@ session-48310605-bb1a-4966-a207-380f947e220b
 
 ### 已知限制
 
-- **「保存到目录」只支持 Markdown 和 HTML。** 宿主的 `ctx.fs` 只有文本写入、没有二进制写入；绕过它直接用 `node:fs` 会无视会话的沙箱策略。ZIP 请用浏览器下载（对话框里选 ZIP 时保存按钮会禁用并说明原因）。
+- **「保存到目录」只支持 Markdown、HTML 和纯文本。** 宿主的 `ctx.fs` 只有文本写入、没有二进制写入；绕过它直接用 `node:fs` 会无视会话的沙箱策略。ZIP 请用浏览器下载（对话框里选 ZIP 时保存按钮会禁用并说明原因）。
 - **不导出子会话（subagent）。** v0.1.0 只导当前会话；子会话递归打包留给后续版本（官方 ZIP 的 `includeDescendants` 是那块功能）。
 - **纯文本里的图片只能给描述**（`[图片] shot.png（640×480, 2.0 KiB）`），txt 装不下二进制。
 - **PDF 是浏览器打印出来的，不是插件生成的。** 产物是 HTML，点「打印 / 另存为 PDF」由浏览器负责排版。
@@ -245,10 +245,18 @@ MIT © 2026 DDDMUC
 
 <div align="center">
   <a href="https://raw.githubusercontent.com/DDDMUC/dsh-chat-export/main/docs/screenshots/01-header-button.png">
-    <img src="https://raw.githubusercontent.com/DDDMUC/dsh-chat-export/main/docs/screenshots/01-header-button.png" alt="The Export transcript entry in the Session header" width="820" />
+    <img src="https://raw.githubusercontent.com/DDDMUC/dsh-chat-export/main/docs/screenshots/01-header-button.png" alt="The export icon in the Session header" width="820" />
   </a>
   <br>
-  <sub>▲ Session header: its own "Export transcript" button, next to the official ⋯ menu</sub>
+  <sub>▲ Session header: a share-icon button, next to the official ⋯ menu</sub>
+</div>
+
+<div align="center">
+  <a href="https://raw.githubusercontent.com/DDDMUC/dsh-chat-export/main/docs/screenshots/02-export-dialog.png">
+    <img src="https://raw.githubusercontent.com/DDDMUC/dsh-chat-export/main/docs/screenshots/02-export-dialog.png" alt="The export dialog" width="820" />
+  </a>
+  <br>
+  <sub>▲ The export dialog: format / scope / images / content / output</sub>
 </div>
 
 ### Why
@@ -257,7 +265,7 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 
 ### Features
 
-- **Two entry points** — a labelled "Export transcript" button in the Session header, or the `/export-md` command (which avoids the official `/export`). A typed line presets the dialog, so the two can never disagree.
+- **Two entry points** — a share-icon button in the Session header (labelled "Export transcript" on hover), or the `/export-md` command (which avoids the official `/export`). A typed line presets the dialog, so the two can never disagree.
 - **Four formats** — Markdown, self-contained HTML (printable to PDF), plain text (no markers at all; readable in any terminal), and a ZIP bundle (`transcript.md` + `transcript.html` + `transcript.txt` + `assets/` + `meta.json`).
 - **Complete content** — user and assistant messages, foldable reasoning blocks, foldable tool calls and results with truncation markers, code fences that cannot be broken by the body, image attachments, timestamps, and the Session title, models, and usage.
 - **One tool call is one line.** Arguments and result share a single collapsed disclosure, so what you read by default is who said what and when; open a call only when you need it.
