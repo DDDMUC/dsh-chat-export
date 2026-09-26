@@ -18,6 +18,26 @@
 //   5. Tool calls are recorded twice - inside the assistant message and as
 //      `tool/call` events - so only one of them is rendered.
 
+/**
+ * The durable message id an event carries, whichever shape it uses.
+ *
+ * `user/message` keeps the message inline while `assistant/message` wraps it in
+ * `message`, and the two spellings are the reason this is a function rather than
+ * a property read.
+ *
+ * @param event - one raw session event.
+ * @returns the message id, or undefined when the event carries none.
+ */
+export function durableMessageId(event) {
+  const data = event?.data ?? {}
+  if (event?.type === 'user/message') return typeof data.id === 'string' ? data.id : undefined
+  if (event?.type === 'assistant/message') {
+    const id = data.message?.id
+    return typeof id === 'string' ? id : undefined
+  }
+  return undefined
+}
+
 /** Event types that participate in the model-visible surface. */
 const SURFACE_TYPES = new Set(['system/message', 'user/message', 'assistant/message', 'tool/result'])
 
@@ -249,6 +269,19 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
 
   const droppedBySurface = (event) => surface !== undefined && SURFACE_TYPES.has(event.type) && surface.shadowed.has(event.seq)
 
+  // Ids of messages a surface replacement removed. The durable message id is the
+  // join key between a `user/message` event and the inbox's spliced copy of the
+  // same message, and only the event carries a surface op - so without this set
+  // a compacted-away prompt comes straight back in through the spliced record.
+  const shadowedMessageIds = new Set()
+  if (surface !== undefined) {
+    for (const event of log) {
+      if (!surface.shadowed.has(event.seq)) continue
+      const id = durableMessageId(event)
+      if (id !== undefined) shadowedMessageIds.add(id)
+    }
+  }
+
   const callIdsDeclared = new Set()
   for (const event of log) {
     if (event.type === 'tool/call' && typeof event.data?.callId === 'string') callIdsDeclared.add(event.data.callId)
@@ -313,6 +346,9 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
   const pushUserEntry = (event, message, human) => {
     const id = typeof message.id === 'string' ? message.id : undefined
     if (id !== undefined) {
+      // Surface mode drops what the model can no longer see, whichever route
+      // the message arrives by.
+      if (shadowedMessageIds.has(id)) return
       if (seenMessageIds.has(id)) return
       seenMessageIds.add(id)
     }
