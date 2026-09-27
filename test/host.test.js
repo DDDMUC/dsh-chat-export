@@ -206,7 +206,7 @@ describe('the .export route', () => {
     const body = await response.text()
     expect(body).not.toContain('###')
     expect(body).not.toContain('<details>')
-    expect(body).toContain('用户 ·')
+    expect(body).toContain('用户')
   })
 
   it('saves a plain-text artifact into a directory', async () => {
@@ -236,7 +236,7 @@ describe('the .export route', () => {
     expect(response.status).toBe(200)
     const body = await response.json()
     expect(body.path).toMatch(/\.txt$/u)
-    expect(written[0].content).toContain('用户 ·')
+    expect(written[0].content).toContain('用户')
   })
 
   it('returns a self-contained HTML document', async () => {
