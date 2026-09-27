@@ -75,14 +75,16 @@ describe('renderText', () => {
     ]
     const body = render(events)
     expect(body).toContain('回合 1')
-    expect(body).toContain('用户 ·')
-    expect(body).toContain('助手 ·')
+    // Timestamps are opt-in, so a heading is the speaker alone (an assistant
+    // heading still names the model it came from).
+    expect(body).toMatch(/^用户$/mu)
+    expect(body).toMatch(/^助手(?: · .+)?$/mu)
     expect(body).not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/u)
   })
 
   it('indents message bodies under their heading', () => {
     const body = render([turnStart(0, 1), userMessage(1, 'm', [text('第一行\n第二行')])])
-    expect(body).toContain('用户 ·')
+    expect(body).toContain('用户')
     expect(body).toContain('  第一行\n  第二行')
   })
 
@@ -121,6 +123,21 @@ describe('renderText', () => {
 
   it('notes an abnormal turn end', () => {
     expect(render([turnStart(0, 1), turnEnd(1, 1, 'interrupted')])).toContain('[注意] 回合 1 结束：interrupted')
+  })
+
+  it('adds the clock to a heading only when timestamps are asked for', () => {
+    const events = [turnStart(0, 1), userMessage(1, 'm', [text('问题')]), assistantMessage(2, [text('回答')])]
+    expect(render(events)).not.toMatch(/用户 · \d{2}:\d{2}/u)
+    expect(render(events, { timestamps: true })).toMatch(/用户 · \d{2}:\d{2}/u)
+  })
+
+  it('omits the usage line unless asked', () => {
+    const events = [
+      turnStart(0, 1),
+      assistantMessage(1, [text('a')], { usage: { inputTokens: 10, outputTokens: 2 } }),
+    ]
+    expect(render(events)).not.toContain('用量')
+    expect(render(events, { usage: true })).toContain('用量')
   })
 
   it('omits tool blocks when the option is off', () => {

@@ -49,8 +49,11 @@ export function defaultOptions() {
     tools: false,
     system: true,
     injected: false,
-    timestamps: true,
-    usage: true,
+    // Timestamps and the usage table are metadata rather than conversation, and
+    // the default is exactly the four content kinds above - so neither is
+    // checked until asked for. `--timestamps` / `--usage` turn them on.
+    timestamps: false,
+    usage: false,
     scope: 'full',
     images: 'auto',
     toolResultLimit: DEFAULT_TOOL_RESULT_LIMIT,
@@ -224,7 +227,7 @@ function exampleValueFor(name) {
 
 /** Human-facing help line advertised through `input.hint` and the dialog. */
 export const COMMAND_HINT =
-  '[md|html|zip|txt] [--tools] [--no-thinking] [--injected] [--no-input] [--no-output] [--no-system] [--surface] [--images=embed|assets|none] [--save=目录]'
+  '[md|html|zip|txt] [--tools] [--timestamps] [--usage] [--no-thinking] [--injected] [--no-input] [--no-output] [--no-system] [--surface] [--images=embed|assets|none] [--save=目录]'
 
 /**
  * Decode export options from a URL query string.

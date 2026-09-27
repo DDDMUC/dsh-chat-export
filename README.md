@@ -94,8 +94,8 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 | `--tools` / `--no-tools` | 工具调用与结果（**默认关**，一次调用一行） |
 | `--system` / `--no-system` | 系统提示词（**默认开**） |
 | `--injected` / `--no-injected` | 注入内容，如插件/目标/指令注入的用户消息（默认关） |
-| `--timestamps` / `--no-timestamps` | 每条消息的时间戳（默认开） |
-| `--usage` / `--no-usage` | 表头的用量统计（默认开） |
+| `--timestamps` / `--no-timestamps` | 每条消息的时间戳（**默认关**） |
+| `--usage` / `--no-usage` | 表头的用量统计（**默认关**） |
 | `--surface` / `--no-surface` | `--surface` 只导当前模型上下文；默认完整日志 |
 | `--images=auto\|embed\|assets\|none` | 图片策略；`auto` 表示单文件内嵌、ZIP 放 `assets/` |
 | `--limit=N` | 单条工具结果的字符上限（默认 4000，`0` 表示不截断） |
@@ -158,11 +158,11 @@ Markdown：
 ![shot.png](assets/001-shot.png)
 ```
 
-**默认勾选四项：用户输入、模型输出、思维链、系统提示词。** 导出的就是「对话本身」——
-用户说了什么、模型说了什么、模型想了什么、系统交代了什么。
+**默认勾选四项：用户输入、模型输出、思维链、系统提示词** —— 导出的就是「对话本身」。
 
-工具调用是这个日志里最吵的部分，读回来时也最没用，所以**默认不勾**，
-需要时再打开 —— 打开后一次调用 = 一行。
+其余四项**默认不勾**：工具调用与结果、注入内容、时间戳、用量统计。
+工具调用是这个日志里最吵的部分，读回来时也最没用；时间戳与用量是元信息，不是对话内容。
+需要时逐个打开（时间戳与用量各只占一行）。
 
 **产物里没有任何装饰性图标。** 参数和结果都收在同一个折叠里，默认展开的只有「谁在什么时候说了什么」。876 次工具调用的长会话，肉眼可见的就是 876 行 `▶ \`名字\` · 耗时 · 结果 N 行`，需要哪次再点开。
 
@@ -273,7 +273,7 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 
 ### Features
 
-**Four kinds of content are checked by default: user input, model output, reasoning, and system prompts** — the conversation itself. Tool calls are the loudest part of a log and the least useful to read back, so they are off by default; turn them on and each call becomes one collapsed line.
+**Four kinds of content are checked by default: user input, model output, reasoning, and system prompts** — the conversation itself. Tool calls, injected context, timestamps, and the usage table are off until asked for. Tool calls are the loudest part of a log and the least useful to read back, so they are off by default; turn them on and each call becomes one collapsed line.
 
 - **Two entry points** — a share-icon button in the Session header (labelled "Export transcript" on hover), or the `/export-md` command (which avoids the official `/export`). A typed line presets the dialog, so the two can never disagree.
 - **Four formats** — Markdown, self-contained HTML (printable to PDF), plain text (no markers at all; readable in any terminal), and a ZIP bundle (`transcript.md` + `transcript.html` + `transcript.txt` + `assets/` + `meta.json`).
