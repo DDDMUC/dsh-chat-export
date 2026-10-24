@@ -25,7 +25,8 @@
 ### 特性
 
 - **两种入口** —— 会话头部的分享图标按钮（悬停显示「导出文字稿」），或 `/export-md` 斜杠命令（避开官方的 `/export`）；命令解析出的选项会带进对话框，两边永远不会打架
-- **四种格式** —— Markdown、HTML（单文件、自包含样式、可打印成 PDF）、纯文本（无任何标记，终端/记事本都能读）、ZIP（md + html + txt + 图片素材 + `meta.json`）
+- **五种格式** —— Markdown、HTML（单文件、自包含样式、可打印成 PDF）、纯文本（无任何标记，终端/记事本都能读）、ZIP（md + html + txt + 图片素材 + `meta.json`）、**会话日志 JSONL**（可回灌的原始事件流）
+- **真导入** —— `/import-session <文件>` 把 JSONL 日志（或 Markdown 文字稿）变回一个真实会话：走宿主的 `sessions.create({ seed })` + `sessionPersistence` 落盘 + `workspace.attachSession`，导入后能直接接着聊，不是一份只读的"假聊天记录"
 - **内容齐全** —— 用户/助手消息、思考块（可折叠）、工具调用与结果（可折叠、超长自动截断并标注）、代码块（围栏长度自适应，正文里的 ``` 撑不破）、图片附件、时间戳、会话标题 / 模型 / 用量统计
 - **导出前可预览** —— 对话框里点「预览开头」直接看 Markdown 开头
 - **两种落盘方式** —— 浏览器下载，或写进指定目录（走官方 `ctx.fs`，受会话沙箱约束）
@@ -76,6 +77,8 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 /export-md zip --images=embed        # 打包，图片内嵌
 /export-md md --thinking --surface   # 带思考块，只导当前上下文
 /export-md html --save=/tmp/导出     # 直接写进目录
+/export-md log --save=/tmp/导出      # 原始事件流，之后能再导入
+/export-md zip --with-log            # 打包时附带 log.jsonl，既能读也能导入
 ```
 
 命令只解析参数，真正的导出在对话框里确认——所以敲错参数会当场报错并给出用法，不会悄悄导出一份你以为不一样的东西。
@@ -88,6 +91,7 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 | `html` | 自包含 HTML |
 | `txt` / `text` / `plain` | 纯文本（不带任何标记） |
 | `zip` | 打包（内含 md + html + txt + 图片 + `meta.json`） |
+| `log` / `jsonl` / `json` | 会话日志（原始事件流，可再导入；是文本，所以 `--save` 也能写盘） |
 | `--input` / `--no-input` | 用户输入（**默认开**） |
 | `--output` / `--no-output` | 模型输出（**默认开**） |
 | `--thinking` / `--no-thinking` | 思维链（**默认开**） |
@@ -99,7 +103,38 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 | `--surface` / `--no-surface` | `--surface` 只导当前模型上下文；默认完整日志 |
 | `--images=auto\|embed\|assets\|none` | 图片策略；`auto` 表示单文件内嵌、ZIP 放 `assets/` |
 | `--limit=N` | 单条工具结果的字符上限（默认 4000，`0` 表示不截断） |
+| `--with-log` / `--no-with-log` | ZIP 里附带 `log.jsonl`（默认关） |
 | `--save[=目录]` | 写进目录而不是下载；不填目录则用会话工作目录下的 `dsh-chat-exports/` |
+
+### 导入
+
+导出的 JSONL 日志能变回一个**真实会话**：
+
+```
+/import-session /tmp/导出/dsh-chat-xxx.jsonl         # 直接导入
+/import-session /tmp/导出/dsh-chat-xxx.jsonl --dry   # 只看会导入什么，不写盘
+/import-session /tmp/导出/dsh-chat-xxx.md            # Markdown 也能导（只有文本）
+/import-session ./log.jsonl --cwd=/Users/me/project  # 指定工作目录
+/import-session ./log.jsonl --title=导入的历史       # 指定标题
+```
+
+它做的事：
+
+1. 读文件 → 按扩展名（再看首个字符）判断是 JSONL 日志还是 Markdown 文字稿
+2. 剔除机器相关记录（`subagent/descriptor`、`request/header`、`tool/ptc-dispatch*`、`compaction/*` 等），把剩下的 `seq` 重排成**从 0 连续**（宿主对种子事件有这个硬要求），并把 `session/title.messageSeqs`、`surfaceOp` 里的 seq 引用一起重写
+3. `sessions.create(id, { seed })` 让宿主逐条校验并建会话 → `sessionPersistence.create(header)` 拿写句柄 → `append` 全部事件 → `close`
+4. `workspace.attachSession(id)` 挂到当前工作区，侧边栏立刻能看到
+
+导入后的会话是**正常可续聊的会话**：新消息照常追加，不是只读快照。
+
+**两种来源的差别**
+
+| 来源 | 保留 | 丢失 |
+| --- | --- | --- |
+| JSONL 日志（`/export-md log` 或 ZIP 里的 `log.jsonl`） | 全部对话、思考、工具调用与结果、用量、时间戳 | 机器相关记录（见上）、图片二进制（引用还在，跨机可能失效） |
+| Markdown 文字稿 | 用户/助手文本，按轮次重建 | 工具调用、思考、图片、真实时间（一律记为导入时刻） |
+
+也可以走接口：`POST /api/dsh-chat-export.import`，body 为 `{ text }` 或 `{ path }`，加 `"dryRun": true` 只返回计划不落盘。
 
 ### 产物长什么样
 
@@ -228,7 +263,11 @@ session-48310605-bb1a-4966-a207-380f947e220b
 
 ### 已知限制
 
-- **「保存到目录」只支持 Markdown、HTML 和纯文本。** 宿主的 `ctx.fs` 只有文本写入、没有二进制写入；绕过它直接用 `node:fs` 会无视会话的沙箱策略。ZIP 请用浏览器下载（对话框里选 ZIP 时保存按钮会禁用并说明原因）。
+- **「保存到目录」只支持 Markdown、HTML、纯文本和 JSONL 日志。** 宿主的 `ctx.fs` 只有文本写入、没有二进制写入；绕过它直接用 `node:fs` 会无视会话的沙箱策略。ZIP 请用浏览器下载（对话框里选 ZIP 时保存按钮会禁用并说明原因）。
+- **导入会丢机器相关记录。** `subagent/descriptor`、`request/header`、`request/context`、`tool/ptc-dispatch*`、`command/*`、`compaction/*` 这些要么指向另一台机器、要么指向被丢掉的事件，导入时会被剔除并在返回里逐类列出条数。对话、思考、工具调用与结果不受影响。
+- **导入不搬图片二进制。** 附件引用（哈希）原样保留，同机通常还能取到；跨机器导入时图片会显示为缺失。要跨机保图，目前得连 ZIP 里的 `assets/` 一起带走再手工入库。
+- **Markdown 导入是有损的。** 只按轮次重建用户/助手文本；工具调用、思考、图片都回不来，时间统一记为导入时刻。要无损请用 `log` 格式。
+- **导入会写进当前工作区。** 会话通过 `workspace.attachSession` 挂到发起导入的那个工作区；`cwd` 默认沿用原会话记录的值（可用 `--cwd=` 覆盖，必须是绝对路径）。
 - **不导出子会话（subagent）。** v0.1.0 只导当前会话；子会话递归打包留给后续版本（官方 ZIP 的 `includeDescendants` 是那块功能）。
 - **纯文本里的图片只能给描述**（`[图片] shot.png（640×480, 2.0 KiB）`），txt 装不下二进制。
 - **PDF 是浏览器打印出来的，不是插件生成的。** 产物是 HTML，点「打印 / 另存为 PDF」由浏览器负责排版。
@@ -276,7 +315,8 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 **Four kinds of content are checked by default: user input, model output, reasoning, and system prompts** — the conversation itself. Tool calls, injected context, timestamps, and the usage table are off until asked for. Tool calls are the loudest part of a log and the least useful to read back, so they are off by default; turn them on and each call becomes one collapsed line.
 
 - **Two entry points** — a share-icon button in the Session header (labelled "Export transcript" on hover), or the `/export-md` command (which avoids the official `/export`). A typed line presets the dialog, so the two can never disagree.
-- **Four formats** — Markdown, self-contained HTML (printable to PDF), plain text (no markers at all; readable in any terminal), and a ZIP bundle (`transcript.md` + `transcript.html` + `transcript.txt` + `assets/` + `meta.json`).
+- **Five formats** — Markdown, self-contained HTML (printable to PDF), plain text (no markers at all; readable in any terminal), a ZIP bundle (`transcript.md` + `transcript.html` + `transcript.txt` + `assets/` + `meta.json`), and a **JSONL session log** — the raw event stream, replayable.
+- **Real import, not a mock** — `/import-session <file>` turns a JSONL log (or a Markdown transcript) back into an actual Session: the host validates it through `sessions.create({ seed })`, it is written through `sessionPersistence`, and `workspace.attachSession` puts it in the sidebar. You can keep talking in it afterwards.
 - **Complete content** — user and assistant messages, foldable reasoning blocks, foldable tool calls and results with truncation markers, code fences that cannot be broken by the body, image attachments, timestamps, and the Session title, models, and usage.
 - **One tool call is one line.** Arguments and result share a single collapsed disclosure, so what you read by default is who said what and when; open a call only when you need it.
 - **Preview before exporting**, and **two outputs**: a browser download, or a write into a directory through the host filesystem.
@@ -301,9 +341,24 @@ Click "导出文字稿" (Export transcript) in the Session header, or type:
 /export-md zip --images=embed        # a bundle with images embedded
 /export-md md --thinking --surface   # reasoning on, current context only
 /export-md html --save=/tmp/exports  # write straight into a directory
+/export-md log --save=/tmp/exports   # the raw event stream, replayable later
+/export-md zip --with-log            # bundle carries log.jsonl too
 ```
 
-Flags: `--thinking`, `--no-tools`, `--system`, `--injected`, `--timestamps`, `--no-usage`, `--surface`, `--images=auto|embed|assets|none`, `--limit=N`, `--save[=dir]`.
+Flags: `--thinking`, `--no-tools`, `--system`, `--injected`, `--timestamps`, `--no-usage`, `--surface`, `--images=auto|embed|assets|none`, `--limit=N`, `--with-log`, `--save[=dir]`.
+
+### Import
+
+```
+/import-session /tmp/exports/dsh-chat-xxx.jsonl         # import it
+/import-session /tmp/exports/dsh-chat-xxx.jsonl --dry   # show the plan, write nothing
+/import-session /tmp/exports/dsh-chat-xxx.md            # Markdown works too (text only)
+/import-session ./log.jsonl --cwd=/Users/me/project     # choose the working directory
+```
+
+The import drops machine-local records (`subagent/descriptor`, `request/header`, `tool/ptc-dispatch*`, `compaction/*`, …), renumbers the surviving events contiguously from seq 0 — the host requires that of a seed — and rewrites the seq references those events carry. Then it seeds the Session, writes it through a persistence handle, and attaches it to the workspace.
+
+A JSONL log keeps the conversation, reasoning, tool calls and results, usage, and timestamps. A Markdown transcript keeps only user/assistant text; tool calls, reasoning, images, and real times are gone. Images are not copied: their attachment references survive, so they usually resolve on the same machine and show as missing elsewhere.
 
 ### How it works
 

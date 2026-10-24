@@ -10,8 +10,8 @@ export const PLUGIN_ID = 'dsh-chat-export'
 /** Route prefix owned by the host half (under the authenticated `/api` bridge). */
 export const API_PREFIX = '/api/dsh-chat-export'
 
-/** Accepted output formats. */
-export const FORMATS = ['md', 'html', 'zip', 'txt']
+/** Accepted output formats. `log` is the machine-readable sidecar. */
+export const FORMATS = ['md', 'html', 'zip', 'txt', 'log']
 
 /** Accepted image strategies. */
 export const IMAGE_MODES = ['auto', 'embed', 'assets', 'none']
@@ -57,6 +57,9 @@ export function defaultOptions() {
     scope: 'full',
     images: 'auto',
     toolResultLimit: DEFAULT_TOOL_RESULT_LIMIT,
+    // Only meaningful for a ZIP bundle: put the replayable sidecar next to the
+    // readable artifacts so one shared archive is both readable and importable.
+    withLog: false,
   }
 }
 
@@ -70,6 +73,7 @@ const BOOLEAN_FLAGS = {
   injected: 'injected',
   timestamps: 'timestamps',
   usage: 'usage',
+  'with-log': 'withLog',
 }
 
 /** Value flags accepted on the command line. */
@@ -117,6 +121,8 @@ function normalizeFormat(token) {
   const value = String(token).toLowerCase()
   if (value === 'markdown' || value === 'mdown' || value === 'mkd') return 'md'
   if (value === 'text' || value === 'plain') return 'txt'
+  // The sidecar is one JSON object per line, so both spellings are accepted.
+  if (value === 'jsonl' || value === 'json') return 'log'
   return FORMATS.includes(value) ? value : undefined
 }
 
@@ -227,7 +233,7 @@ function exampleValueFor(name) {
 
 /** Human-facing help line advertised through `input.hint` and the dialog. */
 export const COMMAND_HINT =
-  '[md|html|zip|txt] [--tools] [--timestamps] [--usage] [--no-thinking] [--injected] [--no-input] [--no-output] [--no-system] [--surface] [--images=embed|assets|none] [--save=目录]'
+  '[md|html|zip|txt|log] [--tools] [--timestamps] [--usage] [--no-thinking] [--injected] [--no-input] [--no-output] [--no-system] [--surface] [--images=embed|assets|none] [--with-log] [--save=目录]'
 
 /**
  * Decode export options from a URL query string.
@@ -265,6 +271,7 @@ export function optionsFromQuery(searchParams) {
   readBool('injected', 'injected')
   readBool('timestamps', 'timestamps')
   readBool('usage', 'usage')
+  readBool('withLog', 'withLog')
 
   const rawScope = searchParams.get('scope')
   if (rawScope !== null) {
@@ -317,6 +324,9 @@ export function optionsToQuery(options, save) {
  * @returns `embed`, `assets`, or `none`.
  */
 export function effectiveImageMode(format, options) {
+  // The sidecar carries the event log, not a rendered document: there is
+  // nowhere to put an image and nothing that would read one.
+  if (format === 'log') return 'none'
   if (options.images === 'none') return 'none'
   if (options.images !== 'auto') return options.images
   return format === 'zip' ? 'assets' : 'embed'
@@ -366,6 +376,7 @@ export function extensionFor(format) {
   if (format === 'md') return 'md'
   if (format === 'html') return 'html'
   if (format === 'txt') return 'txt'
+  if (format === 'log') return 'jsonl'
   return 'zip'
 }
 
@@ -379,16 +390,19 @@ export function contentTypeFor(format) {
   if (format === 'md') return 'text/markdown; charset=utf-8'
   if (format === 'html') return 'text/html; charset=utf-8'
   if (format === 'txt') return 'text/plain; charset=utf-8'
+  if (format === 'log') return 'application/x-ndjson; charset=utf-8'
   return 'application/zip'
 }
 
 /**
  * Whether a format is plain text and therefore writable through `ctx.fs`.
  * The host filesystem exposes a text write and no binary write, so a bundle
- * cannot be saved into a directory.
+ * cannot be saved into a directory. The sidecar is JSONL, which is text, so it
+ * can be saved - and that is what makes `/export-md log --save` a usable way to
+ * put a replayable copy next to the session it came from.
  */
 export function isTextFormat(format) {
-  return format === 'md' || format === 'html' || format === 'txt'
+  return format === 'md' || format === 'html' || format === 'txt' || format === 'log'
 }
 
 /**

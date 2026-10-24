@@ -25,9 +25,12 @@ import {
   optionsToQuery,
   parseCommandInput,
   PLUGIN_ID,
+  tokenize,
 } from './options.js'
 import { produceExport, dataUri } from './export.js'
 import { exportServices, readFileBytes, readImageBytes, readSessionLog, readSessionTitle, writeTextFile } from './sources.js'
+import { parseLogArtifact } from './log.js'
+import { ImportError, createImportedSession, eventsFromMarkdown, planImport } from './import.js'
 
 /** Cordis plugin name. */
 export const name = PLUGIN_ID
@@ -129,7 +132,7 @@ function resolveRequest(state, searchParams) {
 /** The option keys the query actually set, so defaults never override a pending request. */
 function explicitKeys(searchParams, parsed) {
   const keys = new Set(['format'])
-  for (const key of ['thinking', 'tools', 'system', 'injected', 'timestamps', 'usage', 'scope', 'images', 'toolResultLimit']) {
+  for (const key of ['thinking', 'tools', 'system', 'injected', 'timestamps', 'usage', 'scope', 'images', 'toolResultLimit', 'withLog']) {
     if (searchParams.get(key) !== null) keys.add(key)
   }
   const out = {}
@@ -224,6 +227,131 @@ function parseCommand(invocation) {
   return parsed
 }
 
+/** Human-facing help for the import command. */
+const IMPORT_HINT = '<文件路径> [--cwd=目录] [--title=标题] [--md|--log] [--dry]'
+
+/**
+ * Parse one `/import-session` line.
+ *
+ * The grammar is deliberately smaller than the export one: a path, an optional
+ * working directory, an optional title, a forced source kind, and a dry run.
+ *
+ * @param rawInput - exact text after the command name.
+ * @returns `{ path, cwd, title, kind, dryRun, errors }`.
+ */
+export function parseImportInput(rawInput) {
+  const errors = []
+  let path
+  let cwd
+  let title
+  let kind
+  let dryRun = false
+
+  for (const token of tokenize(rawInput ?? '')) {
+    if (token.startsWith('--')) {
+      const body = token.slice(2)
+      const eq = body.indexOf('=')
+      const name = eq === -1 ? body : body.slice(0, eq)
+      const value = eq === -1 ? undefined : body.slice(eq + 1)
+      if (name === 'cwd') {
+        if (value === undefined || value === '') errors.push('--cwd 需要一个绝对路径')
+        else cwd = value
+        continue
+      }
+      if (name === 'title') {
+        if (value === undefined || value === '') errors.push('--title 需要一个标题')
+        else title = value
+        continue
+      }
+      if (name === 'md' || name === 'markdown') {
+        kind = 'markdown'
+        continue
+      }
+      if (name === 'log' || name === 'jsonl') {
+        kind = 'log'
+        continue
+      }
+      if (name === 'dry' || name === 'dry-run') {
+        dryRun = true
+        continue
+      }
+      errors.push(`未知选项 --${name}`)
+      continue
+    }
+    if (path === undefined) path = token
+    else errors.push(`多余参数 "${token}"`)
+  }
+
+  return { path, cwd, title, kind, dryRun, errors }
+}
+
+/** Which reader a file needs, from its extension and then its first character. */
+export function detectImportKind(path, text, forced) {
+  if (forced === 'log' || forced === 'markdown') return forced
+  const lower = String(path ?? '').toLowerCase()
+  if (lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.txt')) return 'markdown'
+  if (lower.endsWith('.jsonl') || lower.endsWith('.json') || lower.endsWith('.ndjson')) return 'log'
+  const head = String(text ?? '').trimStart().slice(0, 1)
+  return head === '{' || head === '[' ? 'log' : 'markdown'
+}
+
+/** Read one import source through the sandbox-aware `ctx.fs`. */
+async function readImportFile(ctx, path, signal) {
+  const fs = ctx.get('fs')
+  if (fs === undefined || typeof fs.resolve !== 'function' || typeof fs.readText !== 'function') {
+    throw new ImportError('no-fs', '宿主没有挂载 fs 服务，无法读取文件；请改用导入接口直接上传内容', 503)
+  }
+  const target = await fs.resolve(path, { signal })
+  return fs.readText(target, signal)
+}
+
+/**
+ * Turn one text payload into a session.
+ *
+ * @param ctx - host context.
+ * @param request - `{ text, path?, kind?, cwd?, title?, dryRun?, attach?, signal? }`.
+ * @returns a JSON-ready summary.
+ */
+export async function runImport(ctx, request) {
+  const text = String(request.text ?? '')
+  if (text.trim() === '') throw new ImportError('empty', '没有可导入的内容')
+  const kind = detectImportKind(request.path, text, request.kind)
+  const now = Date.now()
+
+  const parsed = kind === 'markdown'
+    ? (() => {
+        const built = eventsFromMarkdown(text, { now })
+        return { header: {}, events: built.events, title: built.title, warnings: built.warnings }
+      })()
+    : parseLogArtifact(text)
+
+  // An explicit --cwd wins. Otherwise the session keeps the directory it was
+  // recorded in, which is what makes a self-import land back where it belongs;
+  // a log from another machine can override it with --cwd.
+  const recorded = typeof parsed.header?.cwd === 'string' && parsed.header.cwd.startsWith('/') ? parsed.header.cwd : undefined
+  const cwd = request.cwd ?? recorded
+  const plan = planImport(parsed, {
+    cwd,
+    title: request.title ?? parsed.title,
+    now,
+  })
+  if (request.cwd === undefined && recorded !== undefined) {
+    plan.warnings.push(`工作目录沿用原会话记录：${recorded}（不存在请用 --cwd= 指定）`)
+  }
+
+  const summary = {
+    kind,
+    sessionId: plan.header.id,
+    title: plan.title,
+    eventCount: plan.events.length,
+    warnings: plan.warnings,
+  }
+  if (request.dryRun === true) return { ok: true, dryRun: true, ...summary }
+
+  const created = await createImportedSession(ctx, plan, { signal: request.signal, attach: request.attach })
+  return { ok: true, dryRun: false, ...summary, attached: created.attached }
+}
+
 /** Install the plugin. */
 export function apply(ctx, config = {}) {
   const settings = { ...DEFAULT_CONFIG, ...(config !== null && typeof config === 'object' ? config : {}) }
@@ -250,6 +378,48 @@ export function apply(ctx, config = {}) {
         },
       }),
     'dsh-chat-export: command',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
+        name: 'import-session',
+        description: '把导出的会话日志（或 Markdown 文字稿）导入成一个新会话',
+        input: { hint: IMPORT_HINT },
+        handler: async (invocation) => {
+          const parsed = parseImportInput(invocation.rawInput ?? '')
+          if (parsed.errors.length > 0) {
+            return { kind: 'error', text: `导入参数有误：${parsed.errors.join('；')}\n用法：/import-session ${IMPORT_HINT}` }
+          }
+          if (parsed.path === undefined) {
+            return { kind: 'error', text: `用法：/import-session ${IMPORT_HINT}` }
+          }
+          try {
+            const text = await readImportFile(ctx, parsed.path)
+            const result = await runImport(ctx, {
+              text,
+              path: parsed.path,
+              kind: parsed.kind,
+              cwd: parsed.cwd,
+              title: parsed.title,
+              dryRun: parsed.dryRun,
+            })
+            const lines = [
+              result.dryRun ? '试运行：没有写入任何东西。' : `已导入 ${result.eventCount} 条事件。`,
+              `新会话：${result.sessionId}`,
+              `标题：${result.title}`,
+            ]
+            if (result.dryRun) lines.push('确认无误后去掉 --dry 再执行一次即可真正导入。')
+            else if (result.attached === false) lines.push('注意：工作区服务没有挂载，新会话不会出现在侧边栏，只能用 session id 打开。')
+            if (result.warnings.length > 0) lines.push('', ...result.warnings.map((warning) => `· ${warning}`))
+            return { kind: 'success', text: lines.join('\n') }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return { kind: 'error', text: `导入失败：${message}` }
+          }
+        },
+      }),
+    'dsh-chat-export: import command',
   )
 
   const connection = ctx.get('connection')
@@ -369,12 +539,43 @@ export function apply(ctx, config = {}) {
     },
   })
 
+  connection.fetch.register({
+    path: `${API_PREFIX}.import`,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      try {
+        const body = await readJsonBody(request)
+        const path = typeof body.path === 'string' && body.path !== '' ? body.path : undefined
+        let text = typeof body.text === 'string' ? body.text : undefined
+        if (text === undefined && path === undefined) {
+          throw new ImportError('invalid', '请求体需要 text（文件内容）或 path（文件路径）之一')
+        }
+        if (text === undefined) text = await readImportFile(ctx, path, request.signal)
+        const result = await runImport(ctx, {
+          text,
+          path,
+          kind: body.kind === 'markdown' || body.kind === 'log' ? body.kind : undefined,
+          cwd: typeof body.cwd === 'string' && body.cwd !== '' ? body.cwd : undefined,
+          title: typeof body.title === 'string' && body.title !== '' ? body.title : undefined,
+          dryRun: body.dryRun === true,
+          attach: body.attach !== false,
+          signal: request.signal,
+        })
+        return json(result)
+      } catch (error) {
+        return errorResponse(error)
+      }
+    },
+  })
+
   ctx.effect(() => () => state.pending.clear(), 'dsh-chat-export: pending requests')
 }
 
 /** Turn a thrown value into a response without leaking a stack to the browser. */
 function errorResponse(error) {
   if (error instanceof ExportError) return fail(error.status, error.code, error.message)
+  if (error instanceof ImportError) return fail(error.status ?? 400, error.code, error.message)
   const message = error instanceof Error ? error.message : String(error)
   return fail(500, 'internal', message)
 }

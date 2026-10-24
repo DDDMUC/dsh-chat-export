@@ -37,10 +37,12 @@ window.__ModuleLoader__.load({
       'format.html': 'HTML',
       'format.zip': 'ZIP 打包',
       'format.txt': '纯文本',
+      'format.log': '会话日志',
       'format.md.hint': '带标记的文字稿，标题与折叠都交给阅读器渲染',
       'format.html.hint': '自包含单文件，可直接打印或另存为 PDF',
       'format.zip.hint': 'Markdown + HTML + 纯文本 + 图片素材，全部装进一个压缩包',
       'format.txt.hint': '不带任何标记，结构与层级全靠分隔线和缩进',
+      'format.log.hint': '原始事件流（JSONL），能再用 /import-session 导回一个会话',
       'field.scope': '范围',
       'scope.full': '完整日志',
       'scope.surface': '仅当前上下文',
@@ -78,7 +80,7 @@ window.__ModuleLoader__.load({
       'notice.saved': '已保存到 {path}',
       'error.no-session': '无法确定当前会话。',
       'error.generic': '导出失败：{message}',
-      'error.save-zip': '保存到目录只支持 Markdown / HTML / 纯文本；ZIP 请改用浏览器下载。',
+      'error.save-zip': '保存到目录只支持 Markdown / HTML / 纯文本 / 会话日志；ZIP 请改用浏览器下载。',
     }
 
     const en = {
@@ -91,10 +93,12 @@ window.__ModuleLoader__.load({
       'format.html': 'HTML',
       'format.zip': 'ZIP bundle',
       'format.txt': 'Plain text',
+      'format.log': 'Session log',
       'format.md.hint': 'A marked-up transcript; headings and folds are left to your reader',
       'format.html.hint': 'One self-contained file, ready to print or save as PDF',
       'format.zip.hint': 'Markdown, HTML, plain text, and every image in one archive',
       'format.txt.hint': 'No markers at all; structure comes from rules and indentation',
+      'format.log.hint': 'The raw event stream (JSONL), replayable with /import-session',
       'field.scope': 'Scope',
       'scope.full': 'Full log',
       'scope.surface': 'Current context',
@@ -132,7 +136,7 @@ window.__ModuleLoader__.load({
       'notice.saved': 'Saved to {path}',
       'error.no-session': 'Could not determine the current session.',
       'error.generic': 'Export failed: {message}',
-      'error.save-zip': 'Saving to a directory supports Markdown, HTML, and plain text; download the ZIP instead.',
+      'error.save-zip': 'Saving to a directory supports Markdown, HTML, plain text, and the session log; download the ZIP instead.',
     }
 
     // --- style ----------------------------------------------------------------
@@ -189,6 +193,9 @@ window.__ModuleLoader__.load({
         scope: 'full',
         images: 'auto',
         toolResultLimit: 4000,
+        // Mirrors the host default so the two halves cannot drift. The dialog
+        // itself does not offer the sidecar; `/export-md zip --with-log` does.
+        withLog: false,
       }
     }
 
@@ -405,7 +412,7 @@ window.__ModuleLoader__.load({
       if (extended !== null) return decodeURIComponent(extended[1])
       const plain = /filename="([^"]+)"/iu.exec(disposition)
       if (plain !== null) return plain[1]
-      const extension = format === 'md' ? 'md' : format === 'html' ? 'html' : 'zip'
+      const extension = format === 'md' ? 'md' : format === 'html' ? 'html' : format === 'txt' ? 'txt' : format === 'log' ? 'jsonl' : 'zip'
       return `dsh-chat-export.${extension}`
     }
 
@@ -513,6 +520,7 @@ window.__ModuleLoader__.load({
                     { value: 'html', label: 'format.html', hint: 'format.html.hint' },
                     { value: 'zip', label: 'format.zip', hint: 'format.zip.hint' },
                     { value: 'txt', label: 'format.txt', hint: 'format.txt.hint' },
+                    { value: 'log', label: 'format.log', hint: 'format.log.hint' },
                   ],
                 }),
               ],

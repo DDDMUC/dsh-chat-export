@@ -10,6 +10,7 @@ import { renderMarkdown } from './markdown.js'
 import { renderText } from './text.js'
 import { renderHtml } from './html.js'
 import { buildZip } from './zip.js'
+import { buildLogArtifact, LOG_FILENAME } from './log.js'
 import { effectiveImageMode, exportBaseName, exportFilename, contentTypeFor, PLUGIN_ID } from './options.js'
 import { mediaExtension } from './sources.js'
 
@@ -144,6 +145,23 @@ export async function produceExport(input) {
     }
   }
 
+  // The sidecar is the one lossless artifact: the events go out exactly as the
+  // store served them, so `planImport` can replay them without guessing.
+  if (format === 'log') {
+    const log = buildLogArtifact({ header, events, title: transcript.meta.title })
+    return {
+      format,
+      baseName,
+      filename: exportFilename('log', transcript.meta.title, transcript.meta.createdAt),
+      contentType: contentTypeFor('log'),
+      buffer: Buffer.from(log, 'utf8'),
+      files: [{ path: `${baseName}.jsonl`, data: log }],
+      transcript,
+      missingImages,
+      mode,
+    }
+  }
+
   // A bundle references its assets relatively, so the same HTML renders on disk.
   const bundleHtml = renderHtml(transcript, { imageSrc: (ref) => imagePaths.get(attachmentKey(ref)) ?? null })
   const bundleText = renderText(transcript)
@@ -163,6 +181,11 @@ export async function produceExport(input) {
     entries.push({ path: fileAssetPath(ref), data: bytes })
     void key
   }
+  // A bundle can be both readable and replayable: the sidecar sits next to the
+  // rendered artifacts and the README-equivalent `meta.json` says it is there.
+  if (options.withLog === true) {
+    entries.push({ path: LOG_FILENAME, data: buildLogArtifact({ header, events, title: transcript.meta.title }) })
+  }
   entries.push({
     path: 'meta.json',
     data: JSON.stringify(
@@ -178,6 +201,8 @@ export async function produceExport(input) {
         usage: transcript.meta.usage,
         counts: transcript.meta.counts,
         options,
+        importable: options.withLog === true,
+        ...options.withLog === true ? { log: LOG_FILENAME } : {},
       },
       null,
       2,
