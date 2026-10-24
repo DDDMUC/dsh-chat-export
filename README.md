@@ -123,7 +123,7 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 1. 读文件 → 按扩展名（再看首个字符）判断是 JSONL 日志还是 Markdown 文字稿
 2. 剔除机器相关记录（`subagent/descriptor`、`request/header`、`tool/ptc-dispatch*`、`compaction/*` 等），把剩下的 `seq` 重排成**从 0 连续**（宿主对种子事件有这个硬要求），并把 `session/title.messageSeqs`、`surfaceOp` 里的 seq 引用一起重写
 3. `sessions.create(id, { seed })` 让宿主逐条校验并建会话 → `sessionPersistence.create(header)` 拿写句柄 → `append` 全部事件 → `close`
-4. `workspace.attachSession(id)` 挂到当前工作区，侧边栏立刻能看到
+4. `workspaceRegistry.create(cwd)` 拿到（或复用）该目录对应的工作区实体，再 `workspace.attachSession(id)` 挂进去，侧边栏立刻能看到
 
 导入后的会话是**正常可续聊的会话**：新消息照常追加，不是只读快照。
 
@@ -267,7 +267,7 @@ session-48310605-bb1a-4966-a207-380f947e220b
 - **导入会丢机器相关记录。** `subagent/descriptor`、`request/header`、`request/context`、`tool/ptc-dispatch*`、`command/*`、`compaction/*` 这些要么指向另一台机器、要么指向被丢掉的事件，导入时会被剔除并在返回里逐类列出条数。对话、思考、工具调用与结果不受影响。
 - **导入不搬图片二进制。** 附件引用（哈希）原样保留，同机通常还能取到；跨机器导入时图片会显示为缺失。要跨机保图，目前得连 ZIP 里的 `assets/` 一起带走再手工入库。
 - **Markdown 导入是有损的。** 只按轮次重建用户/助手文本；工具调用、思考、图片都回不来，时间统一记为导入时刻。要无损请用 `log` 格式。
-- **导入会写进当前工作区。** 会话通过 `workspace.attachSession` 挂到发起导入的那个工作区；`cwd` 默认沿用原会话记录的值（可用 `--cwd=` 覆盖，必须是绝对路径）。
+- **导入会写进工作区。** 会话先经 `workspaceRegistry.create(cwd)` 取得（或复用）该目录的工作区实体，再 `attachSession`；目录已不存在时会退回注册表里的第一个工作区，并在返回里说明。
 - **不导出子会话（subagent）。** v0.1.0 只导当前会话；子会话递归打包留给后续版本（官方 ZIP 的 `includeDescendants` 是那块功能）。
 - **纯文本里的图片只能给描述**（`[图片] shot.png（640×480, 2.0 KiB）`），txt 装不下二进制。
 - **PDF 是浏览器打印出来的，不是插件生成的。** 产物是 HTML，点「打印 / 另存为 PDF」由浏览器负责排版。
@@ -356,7 +356,7 @@ Flags: `--thinking`, `--no-tools`, `--system`, `--injected`, `--timestamps`, `--
 /import-session ./log.jsonl --cwd=/Users/me/project     # choose the working directory
 ```
 
-The import drops machine-local records (`subagent/descriptor`, `request/header`, `tool/ptc-dispatch*`, `compaction/*`, …), renumbers the surviving events contiguously from seq 0 — the host requires that of a seed — and rewrites the seq references those events carry. Then it seeds the Session, writes it through a persistence handle, and attaches it to the workspace.
+The import drops machine-local records (`subagent/descriptor`, `request/header`, `tool/ptc-dispatch*`, `compaction/*`, …), renumbers the surviving events contiguously from seq 0 — the host requires that of a seed — and rewrites the seq references those events carry. Message-producing events also get the `surfaceOp: 'append'` marker the store demands. Then it seeds the Session, writes it through a persistence handle, and attaches it to the workspace that owns its directory.
 
 A JSONL log keeps the conversation, reasoning, tool calls and results, usage, and timestamps. A Markdown transcript keeps only user/assistant text; tool calls, reasoning, images, and real times are gone. Images are not copied: their attachment references survive, so they usually resolve on the same machine and show as missing elsewhere.
 

@@ -153,6 +153,13 @@ describe('eventsFromMarkdown', () => {
     expect(assistant.map((event) => [event.data.turn, event.data.step])).toEqual([[1, 1], [2, 1]])
   })
 
+  it('marks every synthesized message as an append-origin surface event', () => {
+    const built = eventsFromMarkdown(markdown, { now: 1000 })
+    const surfaces = built.events.filter((event) => event.type === 'user/message' || event.type === 'assistant/message')
+    expect(surfaces).toHaveLength(4)
+    for (const event of surfaces) expect(event.surfaceOp).toBe('append')
+  })
+
   it('refuses a document with no recognizable messages', () => {
     expect(() => eventsFromMarkdown('# 只有标题\n\n没有消息。', { now: 1000 })).toThrow(ImportError)
   })
@@ -186,8 +193,14 @@ function fakeCtx() {
           },
         }
       }
-      if (name === 'workspace') {
-        return { attachSession: async (id) => calls.push(['attach', id]) }
+      if (name === 'workspaceRegistry') {
+        return {
+          create: async (path) => {
+            calls.push(['registry.create', path])
+            return { id: 'w1', path, attachSession: async (id) => calls.push(['attach', id]) }
+          },
+          list: () => [],
+        }
       }
       return undefined
     },
@@ -209,9 +222,43 @@ describe('createImportedSession', () => {
       ['persistence.create', 'session-new'],
       ['append', 1],
       ['close'],
+      ['registry.create', '/tmp'],
       ['attach', 'session-new'],
     ])
-    expect(result).toMatchObject({ sessionId: 'session-new', eventCount: 1, attached: true })
+    expect(result).toMatchObject({ sessionId: 'session-new', eventCount: 1, attached: true, workspace: '/tmp' })
+  })
+
+  it('falls back to an existing workspace when the recorded directory is gone', async () => {
+    const calls = []
+    const ctx = {
+      get: (name) => {
+        if (name === 'sessions') return { create: () => ({ header: { id: 'session-new' }, snapshotEvents: () => [] }) }
+        if (name === 'sessionPersistence') return { create: async () => ({ append: async () => {}, close: async () => {} }) }
+        if (name === 'workspaceRegistry') {
+          return {
+            create: async () => { throw new Error('no such directory') },
+            list: () => [{ id: 'w9', path: '/Users/me/other', attachSession: async (id) => calls.push(id) }],
+          }
+        }
+        return undefined
+      },
+    }
+    const result = await createImportedSession(ctx, plan)
+    expect(result).toMatchObject({ attached: true, workspace: '/Users/me/other' })
+    expect(calls).toEqual(['session-new'])
+  })
+
+  it('says so when the host has no workspace registry at all', async () => {
+    const ctx = {
+      get: (name) => {
+        if (name === 'sessions') return { create: () => ({ header: { id: 'session-new' }, snapshotEvents: () => [] }) }
+        if (name === 'sessionPersistence') return { create: async () => ({ append: async () => {}, close: async () => {} }) }
+        return undefined
+      },
+    }
+    const result = await createImportedSession(ctx, plan)
+    expect(result.attached).toBe(false)
+    expect(result.warnings.join(' ')).toContain('workspaceRegistry')
   })
 
   it('skips the workspace attach when asked to', async () => {

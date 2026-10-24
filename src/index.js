@@ -410,7 +410,8 @@ export function apply(ctx, config = {}) {
               `标题：${result.title}`,
             ]
             if (result.dryRun) lines.push('确认无误后去掉 --dry 再执行一次即可真正导入。')
-            else if (result.attached === false) lines.push('注意：工作区服务没有挂载，新会话不会出现在侧边栏，只能用 session id 打开。')
+            else if (result.attached === false) lines.push('注意：没能挂到任何工作区，新会话不会出现在侧边栏，只能用 session id 打开。')
+            else if (typeof result.workspace === 'string' && result.workspace !== '') lines.push(`已挂到工作区：${result.workspace}`)
             if (result.warnings.length > 0) lines.push('', ...result.warnings.map((warning) => `· ${warning}`))
             return { kind: 'success', text: lines.join('\n') }
           } catch (error) {

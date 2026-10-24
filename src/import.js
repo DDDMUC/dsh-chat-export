@@ -238,8 +238,13 @@ export function eventsFromMarkdown(text, options = {}) {
   let messages = 0
   let turnNumber = 0
 
-  const push = (type, data) => {
-    events.push({ type, seq: events.length, time: now, data })
+  const push = (type, data, surfaceOp) => {
+    const event = { type, seq: events.length, time: now, data }
+    // Message-producing types are "surface-eligible" and the store refuses a
+    // seed event without a marker: `Session.create` validates every one of
+    // them. A synthesized turn is always an append at its own log position.
+    if (surfaceOp !== undefined) event.surfaceOp = surfaceOp
+    events.push(event)
   }
   const userEvent = (body) => {
     push('user/message', {
@@ -247,7 +252,7 @@ export function eventsFromMarkdown(text, options = {}) {
       source: { kind: 'user' },
       role: 'user',
       id: randomUUID(),
-    })
+    }, 'append')
     messages += 1
   }
   const assistantEvent = (turn, step, body) => {
@@ -261,7 +266,7 @@ export function eventsFromMarkdown(text, options = {}) {
         id: randomUUID(),
       },
       stream: [],
-    })
+    }, 'append')
     messages += 1
   }
 
@@ -311,6 +316,47 @@ export function eventsFromMarkdown(text, options = {}) {
 }
 
 /**
+ * Put a created session into a workspace so the sidebar can see it.
+ *
+ * `attachSession` lives on a workspace ENTITY, not on the registry: the host's
+ * own session-creation path resolves an entity first and then calls it. The
+ * entity for the target directory is created-or-reused through the registry, so
+ * importing into a directory that is already a workspace lands in that one
+ * rather than making a second registration for the same path.
+ *
+ * @param ctx - host context.
+ * @param header - the new session header.
+ * @returns `{ attached, workspace?, reason? }`.
+ */
+async function attachToWorkspace(ctx, header) {
+  const registry = ctx.get('workspaceRegistry')
+  if (registry === undefined || typeof registry.list !== 'function') {
+    return { attached: false, reason: '宿主没有挂载 workspaceRegistry，新会话不会出现在侧边栏' }
+  }
+
+  let workspace
+  if (typeof header.cwd === 'string' && header.cwd !== '' && typeof registry.create === 'function') {
+    try {
+      workspace = await registry.create(header.cwd)
+    } catch {
+      // A recorded directory that no longer exists cannot own a workspace;
+      // fall through to whatever the registry already has.
+      workspace = undefined
+    }
+  }
+  if (workspace === undefined) {
+    const all = registry.list()
+    workspace = Array.isArray(all) ? all[0] : undefined
+  }
+  if (workspace === undefined || typeof workspace.attachSession !== 'function') {
+    return { attached: false, reason: '宿主里没有任何工作区，新会话不会出现在侧边栏' }
+  }
+
+  await workspace.attachSession(header.id)
+  return { attached: true, workspace: workspace.path ?? String(workspace.id ?? '') }
+}
+
+/**
  * Create a real session from a plan.
  *
  * The three calls mirror the agent factory's own creation path: seed the
@@ -321,7 +367,7 @@ export function eventsFromMarkdown(text, options = {}) {
  * @param ctx - host context.
  * @param plan - the result of `planImport` or `eventsFromMarkdown`.
  * @param options - `{ signal?, attach? }`; `attach` defaults to true.
- * @returns `{ sessionId, eventCount, attached, warnings }`.
+ * @returns `{ sessionId, eventCount, attached, workspace?, warnings }`.
  */
 export async function createImportedSession(ctx, plan, options = {}) {
   const sessions = ctx.get('sessions')
@@ -354,12 +400,12 @@ export async function createImportedSession(ctx, plan, options = {}) {
     await handle.close()
   }
 
-  let attached = false
-  const workspace = ctx.get('workspace')
-  if (options.attach !== false && workspace !== undefined && typeof workspace.attachSession === 'function') {
-    await workspace.attachSession(header.id)
-    attached = true
+  const warnings = [...(plan.warnings ?? [])]
+  let attach = { attached: false }
+  if (options.attach !== false) {
+    attach = await attachToWorkspace(ctx, header)
+    if (attach.attached === false && attach.reason !== undefined) warnings.push(attach.reason)
   }
 
-  return { sessionId: header.id, eventCount: events.length, attached, warnings: plan.warnings ?? [] }
+  return { sessionId: header.id, eventCount: events.length, attached: attach.attached, workspace: attach.workspace, warnings }
 }
