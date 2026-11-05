@@ -10,7 +10,7 @@
 // number, flat, and have no comments, extra fields, encryption, or ZIP64. Any
 // of those would need more format than the feature is worth.
 
-import { deflateRawSync } from 'node:zlib'
+import { deflateRawSync, inflateRawSync } from 'node:zlib'
 
 /** CRC-32 lookup table, built once. */
 const CRC_TABLE = (() => {
@@ -150,4 +150,55 @@ export function buildZip(entries, options = {}) {
   end.writeUInt16LE(0, 20)
 
   return Buffer.concat([...localParts, ...centralParts, end])
+}
+
+/**
+ * Read a ZIP archive into a name → bytes map.
+ *
+ * Scope mirrors `buildZip`: stored (0) and raw deflate (8) entries, no
+ * encryption, no ZIP64, no multi-disk. Each entry's size and CRC are verified,
+ * so a corrupted archive is rejected instead of imported half-broken.
+ *
+ * @param buffer - the archive bytes.
+ * @returns `Map<string, Buffer>` in central-directory order.
+ */
+export function readZip(buffer) {
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)
+  // The end-of-central-directory record sits at the very end (its comment is
+  // empty in everything this plugin writes), but scan back over the maximum
+  // comment length so a foreign archive with a comment still resolves.
+  let eocd = -1
+  for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 0xffff; i -= 1) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
+  }
+  if (eocd < 0) throw new Error('not a zip archive: no end-of-central-directory record')
+  const count = buf.readUInt16LE(eocd + 10)
+  let offset = buf.readUInt32LE(eocd + 16)
+  const entries = new Map()
+  for (let index = 0; index < count; index += 1) {
+    if (buf.readUInt32LE(offset) !== 0x02014b50) throw new Error('bad central directory signature')
+    const method = buf.readUInt16LE(offset + 10)
+    const expectedCrc = buf.readUInt32LE(offset + 16)
+    const compressedSize = buf.readUInt32LE(offset + 20)
+    const uncompressedSize = buf.readUInt32LE(offset + 24)
+    const nameLength = buf.readUInt16LE(offset + 28)
+    const extraLength = buf.readUInt16LE(offset + 30)
+    const commentLength = buf.readUInt16LE(offset + 32)
+    const localOffset = buf.readUInt32LE(offset + 42)
+    const name = buf.toString('utf8', offset + 46, offset + 46 + nameLength)
+    if (buf.readUInt32LE(localOffset) !== 0x04034b50) throw new Error('bad local header signature')
+    const localNameLength = buf.readUInt16LE(localOffset + 26)
+    const localExtraLength = buf.readUInt16LE(localOffset + 28)
+    const bodyStart = localOffset + 30 + localNameLength + localExtraLength
+    const body = buf.subarray(bodyStart, bodyStart + compressedSize)
+    let data
+    if (method === 0) data = Buffer.from(body)
+    else if (method === 8) data = inflateRawSync(body)
+    else throw new Error(`unsupported compression method ${method}`)
+    if (data.length !== uncompressedSize) throw new Error(`${name}: size mismatch`)
+    if (crc32(data) !== expectedCrc) throw new Error(`${name}: crc mismatch`)
+    entries.set(name, data)
+    offset += 46 + nameLength + extraLength + commentLength
+  }
+  return entries
 }

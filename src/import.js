@@ -409,3 +409,81 @@ export async function createImportedSession(ctx, plan, options = {}) {
 
   return { sessionId: header.id, eventCount: events.length, attached: attach.attached, workspace: attach.workspace, warnings }
 }
+
+/**
+ * Rewrite every attachment reference in `events` through `idMap`.
+ *
+ * Import writes the bytes back through the attachment store, which may hand out
+ * a fresh `attachmentId` (content-addressed in practice, but not by contract).
+ * Any event citing the old id is updated in place so the replayed session points
+ * at bytes that exist on this machine.
+ *
+ * @param events - parsed event objects (mutated in place).
+ * @param idMap - `Map<oldAttachmentId, newAttachmentId>`.
+ * @returns the same `events` array.
+ */
+export function rewriteAttachmentRefs(events, idMap) {
+  if (idMap.size === 0) return events
+  const seen = new WeakSet()
+  const walk = (value) => {
+    if (value === null || typeof value !== 'object') return
+    if (seen.has(value)) return
+    seen.add(value)
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item)
+      return
+    }
+    if (typeof value.attachmentId === 'string' && idMap.has(value.attachmentId)) {
+      value.attachmentId = idMap.get(value.attachmentId)
+    }
+    for (const key of Object.keys(value)) walk(value[key])
+  }
+  for (const event of events) walk(event)
+  return events
+}
+
+/**
+ * Write the assets of an exported ZIP back into the host attachment store.
+ *
+ * @param ctx - host context.
+ * @param entries - `Map<path, Buffer>` from `readZip`.
+ * @param manifest - the parsed `assets.json` array.
+ * @returns `{ idMap, imported, skipped }`.
+ */
+export async function importZipAssets(ctx, entries, manifest) {
+  const store = ctx.get('attachments')
+  const idMap = new Map()
+  let imported = 0
+  let skipped = 0
+  for (const item of Array.isArray(manifest) ? manifest : []) {
+    if (item === null || typeof item !== 'object') continue
+    const bytes = entries.get(String(item.path ?? ''))
+    if (bytes === undefined) { skipped += 1; continue }
+    const mediaType = typeof item.mediaType === 'string' ? item.mediaType : ''
+    const name = typeof item.name === 'string' && item.name !== '' ? item.name : undefined
+    // Mirror the store's own image/file decision: its advertised media types win,
+    // otherwise the declared type family is the only signal.
+    const imageTypes = store && store.imageLimits && Array.isArray(store.imageLimits.mediaTypes) ? store.imageLimits.mediaTypes : null
+    const asImage = mediaType !== '' && typeof store?.saveImage === 'function' &&
+      (imageTypes === null ? mediaType.startsWith('image/') : imageTypes.includes(mediaType))
+    try {
+      let ref
+      if (asImage) {
+        ref = await store.saveImage(name === undefined ? { data: bytes, mediaType } : { data: bytes, mediaType, name })
+      } else if (typeof store?.saveFile === 'function') {
+        ref = await store.saveFile(name === undefined ? { data: bytes } : { data: bytes, name })
+      }
+      if (ref !== undefined && ref !== null && typeof ref.attachmentId === 'string' && typeof item.attachmentId === 'string' && item.attachmentId !== '') {
+        idMap.set(item.attachmentId, ref.attachmentId)
+        imported += 1
+      } else {
+        skipped += 1
+      }
+    } catch {
+      // A refused upload (size, media type, unwritable root) leaves the image
+      // unresolved rather than aborting the whole import.
+      skipped += 1
+    }
+  }
+  return { idMap, imported, skipped }
+}

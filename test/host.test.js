@@ -1,7 +1,9 @@
 import { inflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { API_PREFIX } from '../src/options.js'
-import { apply, inject, name } from '../src/index.js'
+import { apply, inject, name, runImportZip } from '../src/index.js'
+import { buildZip } from '../src/zip.js'
+import { buildLogArtifact } from '../src/log.js'
 import { exportServices, mediaExtension, idVariants, readSessionLog, readSessionTitle, writeTextFile } from '../src/sources.js'
 import { header, resetClock, sampleSession } from './fixtures/build.js'
 
@@ -101,13 +103,14 @@ describe('plugin shape', () => {
 })
 
 describe('apply', () => {
-  it('registers the export and import commands and five routes', () => {
+  it('registers the export and import commands and six routes', () => {
     const { ctx, routes, commands } = stubContext()
     apply(ctx)
     expect(commands.map((command) => command.name)).toEqual(['export-md', 'import-session'])
     expect([...routes.keys()].sort()).toEqual([
       `${API_PREFIX}.export`,
       `${API_PREFIX}.import`,
+      `${API_PREFIX}.import-zip`,
       `${API_PREFIX}.pending`,
       `${API_PREFIX}.preview`,
       `${API_PREFIX}.save`,
@@ -262,7 +265,23 @@ describe('the .export route', () => {
     expect(names.some((entry) => entry.endsWith('.html'))).toBe(true)
     expect(names).toContain('meta.json')
     expect(names.some((entry) => entry.startsWith('assets/'))).toBe(true)
+    expect(names).toContain('assets.json')
+    const manifest = JSON.parse(readZipEntry(buffer, 'assets.json'))
+    expect(manifest).toHaveLength(1)
+    expect(manifest[0]).toMatchObject({ attachmentId: 'sha256:1111', name: 'shot.png', mediaType: 'image/png' })
     expect(readZipEntry(buffer, 'meta.json')).toContain('dsh-chat-export')
+  })
+
+  it('carries a replayable log when withLog is set', async () => {
+    resetClock()
+    const { ctx, routes } = stubContext()
+    apply(ctx)
+    const response = await call(routes.get(`${API_PREFIX}.export`), `/x?sessionId=${sessionId}&format=zip&withLog=1`)
+    const buffer = Buffer.from(await response.arrayBuffer())
+    const names = zipEntryNames(buffer)
+    expect(names).toContain('log.jsonl')
+    expect(names).toContain('assets.json')
+    expect(JSON.parse(readZipEntry(buffer, 'meta.json')).importable).toBe(true)
   })
 
   it('builds the bundle HTML with relative asset paths, not data URIs', async () => {
@@ -602,3 +621,66 @@ function readZipEntry(buffer, name) {
   }
   throw new Error(`entry not found: ${name}`)
 }
+
+describe('import a ZIP bundle', () => {
+  it('seeds the session and writes its images back into the attachment store', async () => {
+    resetClock()
+    const { header: sessionHeader, events } = sampleSession()
+    const log = buildLogArtifact({ header: sessionHeader, events, title: 'ZIP 导入' })
+    const imageBytes = Buffer.from([137, 80, 78, 71, 9, 9, 9])
+    const zip = buildZip([
+      { path: 'log.jsonl', data: log },
+      { path: 'assets/001-shot.png', data: imageBytes, compress: false },
+      {
+        path: 'assets.json',
+        data: JSON.stringify([
+          { path: 'assets/001-shot.png', attachmentId: 'sha256:1111', name: 'shot.png', mediaType: 'image/png', bytes: imageBytes.length },
+        ]),
+      },
+    ])
+
+    const saved = []
+    let seeded = null
+    const ctx = {
+      get(key) {
+        if (key === 'attachments') {
+          return {
+            imageLimits: { mediaTypes: ['image/png'] },
+            async saveImage(input) {
+              saved.push(input)
+              return { attachmentId: 'sha256:2222', mediaType: input.mediaType, name: input.name, bytes: input.data.length }
+            },
+          }
+        }
+        if (key === 'sessions') {
+          return {
+            create(id, options) {
+              seeded = options.seed
+              return { header: { id }, snapshotEvents: () => options.seed }
+            },
+          }
+        }
+        if (key === 'sessionPersistence') {
+          return { async create() { return { async append() {}, async close() {} } } }
+        }
+        return undefined
+      },
+    }
+
+    const result = await runImportZip(ctx, { zip, attach: false })
+    expect(result.ok).toBe(true)
+    expect(result.assets).toBe(1)
+    expect(saved).toHaveLength(1)
+    expect(Buffer.from(saved[0].data).equals(imageBytes)).toBe(true)
+    expect(saved[0].mediaType).toBe('image/png')
+    // The seeded events cite the id the store handed back, not the old one.
+    const flat = JSON.stringify(seeded)
+    expect(flat).toContain('sha256:2222')
+    expect(flat).not.toContain('sha256:1111')
+  })
+
+  it('refuses a ZIP that carries no session log', async () => {
+    const zip = buildZip([{ path: 'assets.json', data: '[]' }])
+    await expect(runImportZip({ get: () => undefined }, { zip })).rejects.toThrow(/没有会话日志/u)
+  })
+})

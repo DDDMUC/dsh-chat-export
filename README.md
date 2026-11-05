@@ -28,6 +28,9 @@
 - **五种格式** —— Markdown、HTML（单文件、自包含样式、可打印成 PDF）、纯文本（无任何标记，终端/记事本都能读）、ZIP（md + html + txt + 图片素材 + `meta.json`）、**会话日志 JSONL**（可回灌的原始事件流）
 - **真导入** —— `/import-session <文件>` 把 JSONL 日志（或 Markdown 文字稿）变回一个真实会话：走宿主的 `sessions.create({ seed })` + `sessionPersistence` 落盘 + `workspace.attachSession`，导入后能直接接着聊，不是一份只读的"假聊天记录"
 - **内容齐全** —— 用户/助手消息、思考块（可折叠）、工具调用与结果（可折叠、超长自动截断并标注）、代码块（围栏长度自适应，正文里的 ``` 撑不破）、图片附件、时间戳、会话标题 / 模型 / 用量统计
+- **提问有独立卡片** —— `ask_user_question` 不再是一坨 JSON：导出成「提问 · 2/2 已回答」卡片，问题正文、每个选项、以及你实际选中的那条（高亮 + ✓ 已选）都在，默认展开
+- **阅读宽度可调** —— HTML 顶栏一个按钮在「标准 / 宽 / 超宽 / 全宽」之间循环切换，选择记在本机浏览器里
+- **记住上次的选项** —— 导出对话框记住格式、范围、内容开关和输出方式，下次打开直接沿用（目录、选中的文件和预览仍按会话重置）
 - **导出前可预览** —— 对话框里点「预览开头」直接看 Markdown 开头
 - **两种落盘方式** —— 浏览器下载，或写进指定目录（走官方 `ctx.fs`，受会话沙箱约束）
 - **范围可选** —— 「完整日志」按发生顺序导出全部内容（含后来被压缩或删除的历史）；「仅当前上下文」只导出模型现在还能看到的部分
@@ -265,7 +268,7 @@ session-48310605-bb1a-4966-a207-380f947e220b
 
 - **「保存到目录」只支持 Markdown、HTML、纯文本和 JSONL 日志。** 宿主的 `ctx.fs` 只有文本写入、没有二进制写入；绕过它直接用 `node:fs` 会无视会话的沙箱策略。ZIP 请用浏览器下载（对话框里选 ZIP 时保存按钮会禁用并说明原因）。
 - **导入会丢机器相关记录。** `subagent/descriptor`、`request/header`、`request/context`、`tool/ptc-dispatch*`、`command/*`、`compaction/*` 这些要么指向另一台机器、要么指向被丢掉的事件，导入时会被剔除并在返回里逐类列出条数。对话、思考、工具调用与结果不受影响。
-- **导入不搬图片二进制。** 附件引用（哈希）原样保留，同机通常还能取到；跨机器导入时图片会显示为缺失。要跨机保图，目前得连 ZIP 里的 `assets/` 一起带走再手工入库。
+- **图片：JSONL 单独导入不搬二进制**（附件引用原样保留，同机通常能取到，跨机缺失）；**ZIP 导入会把 `assets/` 里的图片写回附件库并重连引用**，所以跨机也能恢复。`files/` 里的普通文件暂不写回。
 - **Markdown 导入是有损的。** 只按轮次重建用户/助手文本；工具调用、思考、图片都回不来，时间统一记为导入时刻。要无损请用 `log` 格式。
 - **导入会写进工作区。** 会话先经 `workspaceRegistry.create(cwd)` 取得（或复用）该目录的工作区实体，再 `attachSession`；目录已不存在时会退回注册表里的第一个工作区，并在返回里说明。
 - **不导出子会话（subagent）。** v0.1.0 只导当前会话；子会话递归打包留给后续版本（官方 ZIP 的 `includeDescendants` 是那块功能）。
@@ -319,6 +322,9 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 - **Real import, not a mock** — `/import-session <file>` turns a JSONL log (or a Markdown transcript) back into an actual Session: the host validates it through `sessions.create({ seed })`, it is written through `sessionPersistence`, and `workspace.attachSession` puts it in the sidebar. You can keep talking in it afterwards.
 - **Complete content** — user and assistant messages, foldable reasoning blocks, foldable tool calls and results with truncation markers, code fences that cannot be broken by the body, image attachments, timestamps, and the Session title, models, and usage.
 - **One tool call is one line.** Arguments and result share a single collapsed disclosure, so what you read by default is who said what and when; open a call only when you need it.
+- **Questions get their own card.** `ask_user_question` no longer renders as raw JSON: it becomes a "提问 · 2/2 已回答" card with the question text, every option, and the one you actually picked (highlighted, marked `✓ 已选`). It opens by default — a question you answered is conversation, not tool plumbing.
+- **Adjustable reading width.** One button in the HTML top bar cycles 标准 / 宽 / 超宽 / 全宽; the choice is remembered per browser.
+- **The dialog remembers your choices** — format, scope, content switches, and output mode carry over to the next open. The directory, the chosen file, and the preview stay per-session.
 - **Preview before exporting**, and **two outputs**: a browser download, or a write into a directory through the host filesystem.
 - **Scope choice** — the full log in order, or only what the model can still see.
 - **Attachment de-duplication**, bilingual UI (zh/en), and **zero runtime dependencies**: no `@deepseek-ai/*` imports, a hand-written ZIP writer, and PDF via the browser's own print dialog.
@@ -358,7 +364,7 @@ Flags: `--thinking`, `--no-tools`, `--system`, `--injected`, `--timestamps`, `--
 
 The import drops machine-local records (`subagent/descriptor`, `request/header`, `tool/ptc-dispatch*`, `compaction/*`, …), renumbers the surviving events contiguously from seq 0 — the host requires that of a seed — and rewrites the seq references those events carry. Message-producing events also get the `surfaceOp: 'append'` marker the store demands. Then it seeds the Session, writes it through a persistence handle, and attaches it to the workspace that owns its directory.
 
-A JSONL log keeps the conversation, reasoning, tool calls and results, usage, and timestamps. A Markdown transcript keeps only user/assistant text; tool calls, reasoning, images, and real times are gone. Images are not copied: their attachment references survive, so they usually resolve on the same machine and show as missing elsewhere.
+A JSONL log keeps the conversation, reasoning, tool calls and results, usage, and timestamps. A Markdown transcript keeps only user/assistant text; tool calls, reasoning, images, and real times are gone. Images are not copied by a JSONL-only import: their attachment references survive, so they usually resolve on the same machine and show as missing elsewhere. A ZIP import writes its `assets/` back into the attachment store and relinks the references, so images survive a move to another machine.
 
 ### How it works
 

@@ -159,7 +159,7 @@ const STYLE = `
 @media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e8e9ea;--dim:#8a8f98;--line:#2c2e31;--soft:#1f2124;--user:#1e2333;--tool:#1c1e20}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.7;-webkit-text-size-adjust:100%}
-.wrap{max-width:900px;margin:0 auto;padding:40px 24px 80px}
+.wrap{max-width:var(--wrap,900px);margin:0 auto;padding:40px 24px 80px}
 h1{font-size:26px;line-height:1.35;margin:0 0 6px}
 h2{font-size:19px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 h3{font-size:15px;margin:22px 0 8px;color:var(--dim);font-weight:600}
@@ -182,6 +182,25 @@ table.meta tr:last-child th,table.meta tr:last-child td{border-bottom:none}
 .tool[open]>summary::before{transform:rotate(90deg)}
 .tool.err>summary{color:var(--warn)}
 .tool .body{padding:0 14px 12px}
+.ask{border:1px solid var(--line);border-radius:10px;margin:12px 0;background:var(--tool);overflow:hidden}
+.ask>summary{cursor:pointer;padding:9px 14px;font-size:13px;display:flex;gap:8px;align-items:center;list-style:none;color:var(--dim)}
+.ask>summary::-webkit-details-marker{display:none}
+.ask>summary::before{content:"▸";transition:transform .12s}
+.ask[open]>summary::before{transform:rotate(90deg)}
+.ask>summary b{color:var(--fg);font-weight:600}
+.ask .body{padding:2px 16px 14px}
+.ask .q{margin:14px 0 0;padding-top:14px;border-top:1px solid var(--line)}
+.ask .q:first-child{margin-top:0;padding-top:0;border-top:none}
+.ask .qh{font-size:12px;letter-spacing:.02em;color:var(--accent);font-weight:600;margin-bottom:4px}
+.ask .qt{font-size:14px}
+.ask .qt>:first-child{margin-top:0}.ask .qt>:last-child{margin-bottom:0}
+.ask ul.opts{list-style:none;margin:10px 0 0;padding:0}
+.ask li.opt{position:relative;border:1px solid var(--line);border-radius:8px;padding:7px 11px;margin:6px 0;background:var(--bg);font-size:13.5px}
+.ask li.opt .lbl{font-weight:500}
+.ask li.opt .desc{color:var(--dim);font-size:12.5px;margin-top:3px;line-height:1.55}
+.ask li.opt.sel{border-color:var(--accent);background:var(--user);box-shadow:inset 3px 0 0 var(--accent)}
+.ask li.opt.sel .lbl::after{content:" ✓ 已选";color:var(--accent);font-size:12px;font-weight:400}
+.ask .pending{color:var(--dim);font-size:12.5px;margin-top:8px}
 details.think{border-left:3px solid var(--line);margin:10px 0;padding-left:12px}
 details.think>summary{cursor:pointer;color:var(--dim);font-size:13px;list-style:none}
 details.think>summary::-webkit-details-marker{display:none}
@@ -258,9 +277,101 @@ function partsHtml(parts, context, openThinking) {
   return out.join('\n')
 }
 
+/** A duration a human can read: `850ms`, `4.2s`, `32m 14s`. */
+export function formatDuration(ms) {
+  const value = Math.max(0, Number(ms) || 0)
+  if (value < 1000) return `${Math.round(value)}ms`
+  const seconds = value / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds - minutes * 60)
+  if (rest === 60) return `${minutes + 1}m`
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`
+}
+
+/** Parse a JSON string, or null when it is not JSON. */
+function parseJson(text) {
+  try {
+    return JSON.parse(String(text ?? ''))
+  } catch {
+    return null
+  }
+}
+
+/** The tool that asks the human a question; it gets its own rendering. */
+const ASK_TOOL = 'ask_user_question'
+
+/**
+ * Render an `ask_user_question` call as a readable question card.
+ *
+ * The log stores the call as `{ questions: [{ id, header, question, options:
+ * [{ label, description }] }] }` and the answer as `{ answers: [{ id,
+ * selected: [...] }] }`, so both halves can be shown instead of a wall of
+ * JSON. A log that predates the structured shape falls back to the ordinary
+ * tool card.
+ *
+ * @returns the card HTML, or null when the arguments are not a question set.
+ */
+function askHtml(entry) {
+  const args = parseJson(entry.arguments)
+  const questions = args !== null && Array.isArray(args.questions) ? args.questions : null
+  if (questions === null || questions.length === 0) return null
+
+  const answered = entry.result === null ? null : parseJson(entry.result.text)
+  const answers = answered !== null && Array.isArray(answered.answers) ? answered.answers : []
+  const byId = new Map()
+  for (const answer of answers) {
+    if (answer === null || typeof answer !== 'object') continue
+    const selected = Array.isArray(answer.selected) ? answer.selected.map(String) : []
+    byId.set(String(answer.id ?? ''), selected)
+  }
+
+  let answeredCount = 0
+  const blocks = []
+  questions.forEach((question, index) => {
+    const item = question !== null && typeof question === 'object' ? question : {}
+    const id = String(item.id ?? index)
+    // Older logs omit `id` on the answers; fall back to position.
+    const selected = byId.get(id) ?? (answers[index] === undefined ? [] : byId.get(String(answers[index].id ?? '')) ?? [])
+    if (selected.length > 0) answeredCount += 1
+
+    const header = String(item.header ?? '')
+    const options = Array.isArray(item.options) ? item.options : []
+    const items = options
+      .map((option) => {
+        const opt = option !== null && typeof option === 'object' ? option : { label: String(option ?? '') }
+        const label = String(opt.label ?? '')
+        const chosen = selected.includes(label)
+        const desc = opt.description === undefined || opt.description === '' ? '' : `<div class="desc">${renderInline(String(opt.description))}</div>`
+        return `<li class="opt${chosen ? ' sel' : ''}"><div class="lbl">${renderInline(label)}</div>${desc}</li>`
+      })
+      .join('')
+
+    blocks.push(
+      `<div class="q">${header === '' ? '' : `<div class="qh">${escapeHtml(header)}</div>`}<div class="qt md">${renderMarkdownBody(
+        String(item.question ?? ''),
+      )}</div>${items === '' ? '' : `<ul class="opts">${items}</ul>`}${
+        selected.length === 0 ? '<p class="pending">（日志中没有记录选择）</p>' : ''
+      }</div>`,
+    )
+  })
+
+  const duration = entry.durationMs === null ? '' : ` · ${formatDuration(entry.durationMs)}`
+  const status = answered === null ? '未记录回答' : `${answeredCount}/${questions.length} 已回答`
+  // Always open: a question the human was asked and answered is conversation,
+  // not tool plumbing, so folding it away would hide the thing being asked for.
+  return `<details class="ask" open><summary><b>提问</b> · ${escapeHtml(status)}${escapeHtml(
+    duration,
+  )}</summary><div class="body">${blocks.join('')}</div></details>`
+}
+
 /** Render one tool entry. */
 function toolHtml(entry, context, openTools) {
-  const duration = entry.durationMs === null ? '' : ` · ${Math.max(0, entry.durationMs)}ms`
+  if (entry.name === ASK_TOOL) {
+    const card = askHtml(entry)
+    if (card !== null) return card
+  }
+  const duration = entry.durationMs === null ? '' : ` · ${formatDuration(entry.durationMs)}`
   const failed = entry.result !== null && entry.result.isError
   const out = [`<details class="tool${failed ? ' err' : ''}"${openTools ? ' open' : ''}>`]
   const tail =
@@ -332,6 +443,29 @@ function metaHtml(transcript) {
 }
 
 /**
+ * The width switcher: four steps, remembered per browser.
+ *
+ * A long transcript on a wide screen is mostly empty margin at the default
+ * 900px, and a table-heavy turn is cramped on a laptop at full width, so the
+ * reader picks. `localStorage` is wrapped because a file:// document may have
+ * storage disabled.
+ */
+const WIDTH_SCRIPT = `(function(){
+var steps=[["900px","标准"],["1120px","宽"],["1360px","超宽"],["none","全宽"]];
+var i=0;
+try{var raw=localStorage.getItem("dshce.w");if(raw!==null){i=parseInt(raw,10)||0}}catch(e){}
+if(!(i>=0&&i<steps.length))i=0;
+function apply(){
+  document.documentElement.style.setProperty("--wrap",steps[i][0]);
+  var b=document.getElementById("dshce-w");
+  if(b)b.textContent="宽度："+steps[i][1];
+  try{localStorage.setItem("dshce.w",String(i))}catch(e){}
+}
+window.dshceWidth=function(){i=(i+1)%steps.length;apply()};
+apply();
+})();`
+
+/**
  * Render a transcript as one self-contained HTML document.
  *
  * @param transcript - the model returned by `buildTranscript`.
@@ -349,6 +483,7 @@ export function renderHtml(transcript, context = {}) {
   parts.push(`<style>${STYLE}</style>`)
   parts.push('</head><body>')
   parts.push('<div class="bar"><strong style="font-size:13px">会话文字稿</strong><span class="grow"></span>')
+  parts.push('<button type="button" id="dshce-w" onclick="dshceWidth()">宽度：标准</button>')
   parts.push('<button type="button" onclick="for(const d of document.querySelectorAll(\'details\'))d.open=true">展开全部</button>')
   parts.push('<button type="button" onclick="for(const d of document.querySelectorAll(\'details\'))d.open=false">折叠全部</button>')
   parts.push('<button type="button" onclick="window.print()">打印 / 另存为 PDF</button>')
@@ -398,6 +533,8 @@ export function renderHtml(transcript, context = {}) {
   if (openTurn) parts.push('</section>')
 
   parts.push('<footer>由 dsh-chat-export 生成 · 内容来自本机会话日志，未经模型改写</footer>')
-  parts.push('</div></body></html>')
+  parts.push('</div>')
+  parts.push(`<script>${WIDTH_SCRIPT}</script>`)
+  parts.push('</body></html>')
   return parts.join('\n')
 }

@@ -509,3 +509,42 @@ describe('collectAttachmentsOf', () => {
     expect(collectAttachmentsOf(events).images.size).toBe(1)
   })
 })
+
+describe('tool results in the current log shape', () => {
+  /** A `tool/result` whose payload is a plain `text` block, as rc.5 writes it. */
+  function plainTextResult(seq, callId, body, extra = {}) {
+    return event(
+      seq,
+      'tool/result',
+      {
+        turn: 1,
+        step: 1,
+        message: { role: 'tool', toolCallId: callId, content: [{ type: 'text', text: body }], isError: false, source: { kind: 'tool', callId } },
+        ...extra,
+      },
+      { surfaceOp: 'append', sourceEventSeqs: [seq - 1] },
+    )
+  }
+
+  it('keeps the text of a result stored as a plain text block', () => {
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'bash'), plainTextResult(2, 'c', 'hello from the tool')]
+    const transcript = buildTranscript(header(), events, defaultOptions())
+    const tool = transcript.entries.find((entry) => entry.kind === 'tool')
+    expect(tool.result.text).toBe('hello from the tool')
+    expect(tool.result.totalChars).toBe(19)
+  })
+
+  it('still reads the older tool-result wrapper', () => {
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'bash'), toolResultEvent(2, 'c', 'wrapped body')]
+    const transcript = buildTranscript(header(), events, defaultOptions())
+    expect(transcript.entries.find((entry) => entry.kind === 'tool').result.text).toBe('wrapped body')
+  })
+
+  it('marks a plain-block result as failed when the event carries an error', () => {
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'bash'), plainTextResult(2, 'c', 'nope', { error: { name: 'EACCES' } })]
+    const transcript = buildTranscript(header(), events, defaultOptions())
+    const tool = transcript.entries.find((entry) => entry.kind === 'tool')
+    expect(tool.result.isError).toBe(true)
+    expect(tool.result.errorName).toBe('EACCES')
+  })
+})

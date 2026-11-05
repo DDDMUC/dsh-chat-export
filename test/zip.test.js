@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { buildZip, crc32, safeEntryPath } from '../src/zip.js'
+import { buildZip, crc32, readZip as readZipArchive, safeEntryPath } from '../src/zip.js'
 
 /**
  * Read a ZIP archive back with nothing but the format specification, so the
@@ -172,5 +172,29 @@ describe('buildZip', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
+  })
+})
+
+describe('readZip', () => {
+  it('round-trips compressed and stored entries', () => {
+    const archive = buildZip([
+      { path: 'a.txt', data: 'hello' },
+      { path: 'b.bin', data: Buffer.from([1, 2, 3]), compress: false },
+    ])
+    const entries = readZipArchive(archive)
+    expect(entries.get('a.txt').toString('utf8')).toBe('hello')
+    expect([...entries.get('b.bin')]).toEqual([1, 2, 3])
+  })
+
+  it('rejects a non-zip buffer', () => {
+    expect(() => readZipArchive(Buffer.from('not a zip'))).toThrow(/end-of-central-directory/u)
+  })
+
+  it('rejects an entry whose bytes were corrupted', () => {
+    const archive = buildZip([{ path: 'a.txt', data: 'hello world hello world' }])
+    const corrupted = Buffer.from(archive)
+    // Local header (30) + name (5) = body start; flip a body byte.
+    corrupted[35] ^= 0xff
+    expect(() => readZipArchive(corrupted)).toThrow()
   })
 })

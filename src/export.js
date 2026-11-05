@@ -186,6 +186,26 @@ export async function produceExport(input) {
   if (options.withLog === true) {
     entries.push({ path: LOG_FILENAME, data: buildLogArtifact({ header, events, title: transcript.meta.title }) })
   }
+  // A manifest of the images carried in `assets/`, so an import can write the
+  // bytes back into the attachment store and relink each reference. The file
+  // name alone cannot do that: `assets/001-shot.png` says nothing about which
+  // `attachmentId` the events cite.
+  entries.push({
+    path: 'assets.json',
+    data: JSON.stringify(
+      images
+        .filter((entry) => imageBytes.has(entry.key))
+        .map((entry) => ({
+          path: imagePaths.get(entry.key),
+          attachmentId: typeof entry.ref.attachmentId === 'string' ? entry.ref.attachmentId : '',
+          name: typeof entry.ref.name === 'string' ? entry.ref.name : '',
+          mediaType: typeof entry.ref.mediaType === 'string' ? entry.ref.mediaType : '',
+          bytes: imageBytes.get(entry.key).length,
+        })),
+      null,
+      2,
+    ),
+  })
   entries.push({
     path: 'meta.json',
     data: JSON.stringify(

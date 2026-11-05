@@ -30,7 +30,8 @@ import {
 import { produceExport, dataUri } from './export.js'
 import { exportServices, readFileBytes, readImageBytes, readSessionLog, readSessionTitle, writeTextFile } from './sources.js'
 import { parseLogArtifact } from './log.js'
-import { ImportError, createImportedSession, eventsFromMarkdown, planImport } from './import.js'
+import { ImportError, createImportedSession, eventsFromMarkdown, importZipAssets, planImport, rewriteAttachmentRefs } from './import.js'
+import { readZip } from './zip.js'
 
 /** Cordis plugin name. */
 export const name = PLUGIN_ID
@@ -352,6 +353,72 @@ export async function runImport(ctx, request) {
   return { ok: true, dryRun: false, ...summary, attached: created.attached }
 }
 
+/**
+ * Import a ZIP bundle: its `log.jsonl` seeds the session, and `assets.json`
+ * names the images to write back into the attachment store.
+ *
+ * A dry run parses and plans but writes nothing, so it cannot tell you whether
+ * an image will be refused; it reports how many it *would* restore.
+ *
+ * @param ctx - host context.
+ * @param request - `{ zip, cwd?, title?, dryRun?, attach?, signal? }`.
+ * @returns a JSON-ready summary.
+ */
+export async function runImportZip(ctx, request) {
+  const zip = Buffer.isBuffer(request.zip) ? request.zip : Buffer.from(request.zip ?? '')
+  if (zip.length === 0) throw new ImportError('invalid', '没有收到 ZIP 内容')
+  const entries = readZip(zip)
+  const logName = [...entries.keys()].find((name) => name.toLowerCase().endsWith('.jsonl'))
+  if (logName === undefined) {
+    throw new ImportError('no-log', '这个 ZIP 里没有会话日志：导出时请附带日志（ZIP 的 withLog / --with-log）')
+  }
+  const logText = entries.get(logName).toString('utf8')
+  let manifest = []
+  const manifestBytes = entries.get('assets.json')
+  if (manifestBytes !== undefined) {
+    try {
+      const parsedManifest = JSON.parse(manifestBytes.toString('utf8'))
+      if (Array.isArray(parsedManifest)) manifest = parsedManifest
+    } catch {
+      manifest = []
+    }
+  }
+
+  const now = Date.now()
+  const parsed = parseLogArtifact(logText)
+  let assetInfo = { idMap: new Map(), imported: 0, skipped: 0 }
+  if (request.dryRun !== true && manifest.length > 0) {
+    assetInfo = await importZipAssets(ctx, entries, manifest)
+    rewriteAttachmentRefs(parsed.events, assetInfo.idMap)
+  }
+
+  const recorded = typeof parsed.header?.cwd === 'string' && parsed.header.cwd.startsWith('/') ? parsed.header.cwd : undefined
+  const cwd = request.cwd ?? recorded
+  const plan = planImport(parsed, { cwd, title: request.title ?? parsed.title, now })
+  if (request.cwd === undefined && recorded !== undefined) {
+    plan.warnings.push(`工作目录沿用原会话记录：${recorded}（不存在请用 --cwd= 指定）`)
+  }
+  if (manifest.length > 0) {
+    plan.warnings.push(
+      request.dryRun === true
+        ? `将写回 ${manifest.length} 个图片资产`
+        : `图片资产 ${manifest.length} 个：写回 ${assetInfo.imported} 个，跳过 ${assetInfo.skipped} 个`,
+    )
+  }
+
+  const summary = {
+    kind: 'log',
+    sessionId: plan.header.id,
+    title: plan.title,
+    eventCount: plan.events.length,
+    assets: manifest.length,
+    warnings: plan.warnings,
+  }
+  if (request.dryRun === true) return { ok: true, dryRun: true, ...summary }
+  const created = await createImportedSession(ctx, plan, { signal: request.signal, attach: request.attach })
+  return { ok: true, dryRun: false, ...summary, attached: created.attached }
+}
+
 /** Install the plugin. */
 export function apply(ctx, config = {}) {
   const settings = { ...DEFAULT_CONFIG, ...(config !== null && typeof config === 'object' ? config : {}) }
@@ -557,6 +624,30 @@ export function apply(ctx, config = {}) {
           text,
           path,
           kind: body.kind === 'markdown' || body.kind === 'log' ? body.kind : undefined,
+          cwd: typeof body.cwd === 'string' && body.cwd !== '' ? body.cwd : undefined,
+          title: typeof body.title === 'string' && body.title !== '' ? body.title : undefined,
+          dryRun: body.dryRun === true,
+          attach: body.attach !== false,
+          signal: request.signal,
+        })
+        return json(result)
+      } catch (error) {
+        return errorResponse(error)
+      }
+    },
+  })
+
+  connection.fetch.register({
+    path: `${API_PREFIX}.import-zip`,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      try {
+        const body = await readJsonBody(request)
+        const zip = typeof body.zip === 'string' ? Buffer.from(body.zip, 'base64') : Buffer.alloc(0)
+        if (zip.length === 0) throw new ImportError('invalid', '请求体缺少 zip（base64）')
+        const result = await runImportZip(ctx, {
+          zip,
           cwd: typeof body.cwd === 'string' && body.cwd !== '' ? body.cwd : undefined,
           title: typeof body.title === 'string' && body.title !== '' ? body.title : undefined,
           dryRun: body.dryRun === true,

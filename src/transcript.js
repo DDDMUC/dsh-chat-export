@@ -86,9 +86,16 @@ function contentOf(value) {
   return Array.isArray(value) ? value : []
 }
 
-/** Whether one content block is a tool-result carrier. */
-function isToolResultBlock(block) {
-  return block !== null && typeof block === 'object' && block.type === 'tool-result'
+/**
+ * Whether one content block, or anything nested inside it, is flagged failed.
+ *
+ * A `tool-result` block carries the flag on itself; a plain `text` block does
+ * not, so the event-level `data.error` remains the other source of truth.
+ */
+function isErrorBlock(block) {
+  if (block === null || typeof block !== 'object') return false
+  if (block.isError === true) return true
+  return Array.isArray(block.content) ? block.content.some(isErrorBlock) : false
 }
 
 /**
@@ -578,11 +585,15 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
         toolsByCallId.set(callId, entry)
         entries.push(entry)
       }
-      const blocks = contentOf(message.content).filter(isToolResultBlock)
-      const bodies = blocks.map((block) => readToolResultContent(block.content))
-      const joined = bodies.map((body) => body.text).filter((text) => text !== '').join('\n')
-      const images = bodies.flatMap((body) => body.images)
-      const shortened = truncateBody(joined, options.toolResultLimit)
+      // A `tool/result` message carries the payload as plain `text` blocks in
+      // current logs and as `tool-result` blocks in older ones. Both are the
+      // result, and `readToolResultContent` walks either shape, so the whole
+      // content array goes in: filtering for `tool-result` alone silently
+      // dropped the output of almost every tool call.
+      const blocks = contentOf(message.content)
+      const body = readToolResultContent(blocks)
+      const shortened = truncateBody(body.text, options.toolResultLimit)
+      const images = body.images
       for (const ref of images) {
         attachmentSink.images.set(attachmentKey(ref), ref)
         const key = attachmentKey(ref)
@@ -597,7 +608,7 @@ export function buildTranscript(header, events, options, attachmentSink = { imag
         truncated: shortened.truncated,
         totalChars: shortened.totalChars,
         totalLines: shortened.totalLines,
-        isError: blocks.some((block) => block.isError === true) || (failure !== null && failure !== undefined),
+        isError: blocks.some(isErrorBlock) || (failure !== null && failure !== undefined),
         errorName: failure !== null && typeof failure === 'object' ? String(failure.name ?? '') : '',
         images,
       }

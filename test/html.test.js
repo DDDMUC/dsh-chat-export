@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildTranscript } from '../src/transcript.js'
 import { defaultOptions } from '../src/options.js'
-import { escapeHtml, renderHtml, renderMarkdownBody } from '../src/html.js'
+import { escapeHtml, formatDuration, renderHtml, renderMarkdownBody } from '../src/html.js'
 import {
   assistantMessage,
   header,
@@ -183,5 +183,84 @@ describe('renderHtml', () => {
   it('always closes the last open section', () => {
     const html = render([turnStart(0, 1), userMessage(1, 'm', [text('last turn, no turn/end')])])
     expect((html.match(/<section/g) ?? []).length).toBe((html.match(/<\/section>/g) ?? []).length)
+  })
+})
+
+describe('ask_user_question cards', () => {
+  const args = JSON.stringify({
+    questions: [
+      {
+        id: 'deploy',
+        header: '部署方式',
+        question: '新版 client.js 怎么部署？',
+        options: [
+          { label: '我自己复制并重启', description: '推荐：改动只在你手里' },
+          { label: '你来复制' },
+        ],
+      },
+      { id: 'verify', header: '回归', question: '要连接浏览器做回归吗？', options: [{ label: '要' }, { label: '不要' }] },
+    ],
+  })
+
+  it('renders questions, options, and the chosen answer', () => {
+    const answer = JSON.stringify({ answers: [{ id: 'deploy', selected: ['我自己复制并重启'] }] })
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'ask_user_question', args), toolResultEvent(2, 'c', answer)]
+    const html = render(events, { tools: true })
+
+    expect(html).toContain('<details class="ask"')
+    expect(html).toContain('提问')
+    expect(html).toContain('1/2 已回答')
+    expect(html).toContain('部署方式')
+    expect(html).toContain('新版 client.js 怎么部署？')
+    expect(html).toContain('<li class="opt sel"><div class="lbl">我自己复制并重启</div>')
+    expect(html).toContain('推荐：改动只在你手里')
+    // The unanswered question still renders, with its options.
+    expect(html).toContain('要连接浏览器做回归吗？')
+  })
+
+  it('marks an unanswered question instead of inventing a choice', () => {
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'ask_user_question', args)]
+    const html = render(events, { tools: true })
+    expect(html).toContain('未记录回答')
+    expect(html).toContain('（日志中没有记录选择）')
+    expect(html).not.toContain('class="opt sel"')
+  })
+
+  it('falls back to the plain tool card when the arguments are not a question set', () => {
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'ask_user_question', 'not json')]
+    const html = render(events, { tools: true })
+    expect(html).not.toContain('class="ask"')
+    expect(html).toContain('<details class="tool">')
+  })
+
+  it('leaves other tools alone', () => {
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'bash', args)]
+    const html = render(events, { tools: true })
+    expect(html).not.toContain('class="ask"')
+  })
+})
+
+describe('reading width', () => {
+  it('exposes a width control and a CSS variable for it', () => {
+    const html = render([], {}, {})
+    expect(html).toContain('max-width:var(--wrap,900px)')
+    expect(html).toContain('id="dshce-w"')
+    expect(html).toContain('dshceWidth()')
+    expect(html).toContain('1360px')
+  })
+})
+
+describe('formatDuration', () => {
+  it('scales the unit to the length', () => {
+    expect(formatDuration(0)).toBe('0ms')
+    expect(formatDuration(850)).toBe('850ms')
+    expect(formatDuration(4200)).toBe('4.2s')
+    expect(formatDuration(60000)).toBe('1m')
+    expect(formatDuration(1933659)).toBe('32m 14s')
+  })
+
+  it('treats a missing duration as zero rather than NaN', () => {
+    expect(formatDuration(undefined)).toBe('0ms')
+    expect(formatDuration(-5)).toBe('0ms')
   })
 })

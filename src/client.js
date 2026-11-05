@@ -1,8 +1,9 @@
 // dsh-chat-export - browser half.
 //
-// One entry point: a share icon in the Session header that opens the
-// export dialog. The `/export-md` command drives the same dialog, so a typed
-// line and the button can never disagree about what will be produced.
+// One entry point: a share icon in the Session header that opens a dialog with
+// two tabs — export (the default) and import. The `/export-md` command drives
+// the export tab, so a typed line and the button can never disagree about what
+// will be produced.
 //
 // The plugin is a classic client bundle (the client-modules protocol): it
 // registers a factory with `window.__ModuleLoader__` and returns `apply`.
@@ -28,8 +29,8 @@ window.__ModuleLoader__.load({
     // --- copy -----------------------------------------------------------------
 
     const zh = {
-      'action.label': '导出文字稿',
-      'action.title': '把当前会话导出成可读文字稿',
+      'action.label': '导出或导入会话',
+      'action.title': '导出文字稿，或导入一个会话',
       'dialog.title': '导出会话文字稿',
       'dialog.description': '把当前会话导出成可读的 Markdown、HTML、纯文本或打包文件。导出只读会话日志，不修改任何内容。',
       'field.format': '格式',
@@ -81,11 +82,39 @@ window.__ModuleLoader__.load({
       'error.no-session': '无法确定当前会话。',
       'error.generic': '导出失败：{message}',
       'error.save-zip': '保存到目录只支持 Markdown / HTML / 纯文本 / 会话日志；ZIP 请改用浏览器下载。',
+      'tab.export': '导出',
+      'tab.import': '导入',
+      'import.dialog.title': '导入会话',
+      'import.dialog.description': '把导出的会话日志（JSONL）、ZIP 包或文字稿（Markdown）变回一个能继续聊的真实会话。ZIP 会顺带把图片写回附件库。导入只新建会话，不改动原文件。',
+      'import.field.source': '来源',
+      'import.chooseFile': '选择文件',
+      'import.noFile': '尚未选择文件',
+      'import.source.hint': 'JSONL 日志可无损导入；ZIP 包还能把图片一起写回；Markdown 只保留文字。',
+      'import.field.options': '选项',
+      'import.title.label': '标题',
+      'import.title.placeholder': '留空则用文件里的标题',
+      'import.cwd.label': '工作目录',
+      'import.cwd.placeholder': '绝对路径，留空则用原会话记录的目录',
+      'import.preview.show': '预览（只看不写）',
+      'import.preview.title': '将导入：{kind} · {title} · {count} 条事件',
+      'import.kind.log': '会话日志',
+      'import.kind.markdown': '文字稿',
+      'import.preview.untitled': '（无标题）',
+      'action.import': '导入',
+      'action.importing': '导入中…',
+      'notice.imported': '已导入会话：{title}（{count} 条事件）',
+      'error.import': '导入失败：{message}',
+      'import.error.noFile': '请先选择一个文件。',
+      'import.dropzone': '拖拽文件到这里，或点击选择',
+      'import.dropzone.hint': '支持 .zip（含图片写回）/ .jsonl / .md',
+      'import.dropzone.replace': '点击或拖拽可替换',
+      'import.dropzone.active': '松开即可导入',
+      'import.dropzone.active.hint': '文件只在本地读取，不会上传',
     }
 
     const en = {
-      'action.label': 'Export transcript',
-      'action.title': 'Export this session as a readable transcript',
+      'action.label': 'Export or import a session',
+      'action.title': 'Export a transcript, or import a session',
       'dialog.title': 'Export session transcript',
       'dialog.description': 'Export this session as a readable Markdown file, a self-contained HTML page, plain text, or a bundle. Export only reads the session log.',
       'field.format': 'Format',
@@ -137,6 +166,34 @@ window.__ModuleLoader__.load({
       'error.no-session': 'Could not determine the current session.',
       'error.generic': 'Export failed: {message}',
       'error.save-zip': 'Saving to a directory supports Markdown, HTML, plain text, and the session log; download the ZIP instead.',
+      'tab.export': 'Export',
+      'tab.import': 'Import',
+      'import.dialog.title': 'Import a session',
+      'import.dialog.description': 'Turn an exported session log (JSONL), a ZIP bundle, or a transcript (Markdown) back into a real, continuable session. A ZIP also writes its images back into the attachment store. Import only creates a new session; it never modifies the file.',
+      'import.field.source': 'Source',
+      'import.chooseFile': 'Choose file',
+      'import.noFile': 'No file chosen',
+      'import.source.hint': 'A JSONL log imports losslessly; a ZIP bundle also restores its images; Markdown keeps text only.',
+      'import.field.options': 'Options',
+      'import.title.label': 'Title',
+      'import.title.placeholder': 'Empty uses the title from the file',
+      'import.cwd.label': 'Working directory',
+      'import.cwd.placeholder': 'Absolute path; empty uses the directory the session recorded',
+      'import.preview.show': 'Preview (writes nothing)',
+      'import.preview.title': 'Will import: {kind} · {title} · {count} events',
+      'import.kind.log': 'session log',
+      'import.kind.markdown': 'transcript',
+      'import.preview.untitled': '(untitled)',
+      'action.import': 'Import',
+      'action.importing': 'Importing...',
+      'notice.imported': 'Imported session: {title} ({count} events)',
+      'error.import': 'Import failed: {message}',
+      'import.error.noFile': 'Choose a file first.',
+      'import.dropzone': 'Drop a file here, or click to choose',
+      'import.dropzone.hint': 'Supports .zip (restores images) / .jsonl / .md',
+      'import.dropzone.replace': 'click or drop to replace',
+      'import.dropzone.active': 'Release to import',
+      'import.dropzone.active.hint': 'The file is read locally; nothing is uploaded',
     }
 
     // --- style ----------------------------------------------------------------
@@ -146,6 +203,15 @@ window.__ModuleLoader__.load({
       // icon button so the two sit in one row without looking mismatched.
       '.dshce-header-action{width:28px;flex:none;padding:0;color:var(--dsw-alias-label-secondary,inherit)}',
       '.dshce-header-action svg{width:15px;height:15px}',
+      // The header glyph is two halves of the same share icon: the top one as-is
+      // (export), the bottom one rotated 180° (import). 7 + 1 + 7 = the 15px box
+      // the single icon used, so the button keeps the same optical size.
+      '.dshce-header-action .dshce-header-icon{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:0.5px;width:8.8px;height:16.1px;line-height:0}',
+      '.dshce-header-action .dshce-header-icon-half{display:flex;align-items:center;justify-content:center;width:8.8px;height:7.8px;line-height:0}',
+      // The glyph is square, so a plain 8.8x7.8 box would letterbox it back to
+      // 7.8 wide. Stretch it 8.8/7.8 so the requested width is real.
+      '.dshce-header-action .dshce-header-icon-half svg{width:7.8px;height:7.8px;display:block;transform:scaleX(1.1282)}',
+      '.dshce-header-action .dshce-header-icon-flip{transform:rotate(180deg)}',
       '.dshce-group{margin:0 0 18px}',
       '.dshce-group:last-child{margin-bottom:0}',
       '.dshce-group-title{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,inherit)}',
@@ -157,10 +223,25 @@ window.__ModuleLoader__.load({
       '.dshce-preview{margin-top:10px;max-height:260px;overflow:auto;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.2));border-radius:8px;background:var(--dsw-alias-bg-secondary,rgba(127,127,127,.06));padding:10px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary,#5c6068)}',
       '.dshce-error{margin:12px 0 0;font-size:13px;line-height:20px;color:var(--dsw-alias-state-error-primary,#d54941)}',
       '.dshce-toast{position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:60;padding:8px 16px;border-radius:10px;background:var(--dsw-alias-bg-elevated,#222);color:var(--dsw-alias-label-primary,#fff);font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.24)}',
+      '.dshce-tabs{display:flex;gap:8px;margin:0 0 18px;padding-bottom:12px;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.2))}',
+      '.dshce-dropzone{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;width:100%;box-sizing:border-box;padding:18px 16px;border:1px dashed var(--dsw-alias-border-l1,rgba(127,127,127,.35));border-radius:10px;background:var(--dsw-alias-bg-secondary,rgba(127,127,127,.04));cursor:pointer;text-align:center;transition:border-color .15s ease,background .15s ease}',
+      '.dshce-dropzone:hover{border-color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      '.dshce-dropzone-active,.dshce-dropzone-active:hover{border-color:var(--dsw-alias-label-primary,currentColor);background:var(--dsw-alias-bg-elevated,rgba(127,127,127,.10))}',
+      '.dshce-dropzone-icon{width:22px;height:22px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      '.dshce-dropzone-title{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary,inherit);word-break:break-all}',
+      '.dshce-dropzone-hint{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      '.dshce-file-input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}',
+      '.dshce-field-label{display:block;margin:14px 0 0;font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary,inherit)}',
+      '.dshce-warnings{margin:8px 0 0;padding-left:18px;font-size:12px;line-height:20px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
     ].join('')
 
     const TAG_ID = 'dsh-chat-export/client.css'
-    if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(TAG_ID) + ']') === null) {
+    if (typeof document !== 'undefined') {
+      // Replace any tag a previous (hot-reloaded) instance left behind: keeping
+      // it would make a "only if absent" guard skip the append and silently
+      // drop the rules added since the last load.
+      const stale = document.querySelector('style[data-plugin-css=' + JSON.stringify(TAG_ID) + ']')
+      if (stale !== null && stale !== undefined) stale.remove?.()
       const tag = document.createElement('style')
       tag.dataset.plugin = 'dsh-chat-export'
       tag.dataset.pluginCss = TAG_ID
@@ -199,6 +280,64 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Where the dialog remembers the options the user last exported with.
+     *
+     * The dialog is opened for one session at a time, but the choices (format,
+     * scope, which parts to include) are a habit, not a per-session decision:
+     * resetting them on every open means re-clicking the same five controls.
+     */
+    const FORM_KEY = 'dsh-chat-export.form.v1'
+
+    /** The remembered payload, or null when there is none. */
+    function loadSaved() {
+      if (typeof window === 'undefined' || window.localStorage === undefined) return null
+      try {
+        const raw = window.localStorage.getItem(FORM_KEY)
+        if (raw === null) return null
+        const saved = JSON.parse(raw)
+        return saved !== null && typeof saved === 'object' ? saved : null
+      } catch {
+        // Private mode, a corrupt value, or storage disabled: use the defaults.
+        return null
+      }
+    }
+
+    /**
+     * The form to open the dialog with.
+     *
+     * Values are copied onto a fresh default one key at a time, so a form saved
+     * by an older version cannot reintroduce a field that no longer exists, and
+     * a type that changed shape is ignored rather than trusted.
+     */
+    function loadSavedForm() {
+      const base = defaultForm()
+      const saved = loadSaved()
+      if (saved === null || saved.form === null || typeof saved.form !== 'object') return base
+      for (const key of Object.keys(base)) {
+        const value = saved.form[key]
+        if (value === undefined || typeof value !== typeof base[key]) continue
+        base[key] = value
+      }
+      return base
+    }
+
+    /** The remembered output mode. */
+    function loadSavedMode() {
+      const saved = loadSaved()
+      return saved !== null && saved.mode === 'save' ? 'save' : 'download'
+    }
+
+    /** Persist the form and mode for the next open. */
+    function saveForm(form, mode) {
+      if (typeof window === 'undefined' || window.localStorage === undefined) return
+      try {
+        window.localStorage.setItem(FORM_KEY, JSON.stringify({ form, mode }))
+      } catch {
+        // Storage is a convenience here, never a requirement.
+      }
+    }
+
     /** Per-session dialog state. */
     function defaultEntry() {
       return {
@@ -206,11 +345,25 @@ window.__ModuleLoader__.load({
         busy: false,
         error: null,
         notice: null,
-        form: defaultForm(),
-        mode: 'download',
+        form: loadSavedForm(),
+        mode: loadSavedMode(),
         directory: '',
         preview: null,
         previewLoading: false,
+        // Import tab state. Kept beside the export state so one dialog can
+        // switch between the two without losing what the other tab held.
+        tab: 'export',
+        impName: '',
+        impText: '',
+        impZip: '',
+        impKind: '',
+        impTitle: '',
+        impCwd: '',
+        impPreview: null,
+        impBusy: false,
+        impError: null,
+        impDragging: false,
+        impSize: 0,
       }
     }
 
@@ -219,6 +372,14 @@ window.__ModuleLoader__.load({
       let out = String(template)
       for (const [key, value] of Object.entries(params ?? {})) out = out.split(`{${key}}`).join(String(value))
       return out
+    }
+
+    /** Human-readable byte size for the chosen file. */
+    function formatBytes(bytes) {
+      const n = Number(bytes) || 0
+      if (n < 1024) return `${n} B`
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+      return `${(n / 1024 / 1024).toFixed(1)} MB`
     }
 
     // --- controller -----------------------------------------------------------
@@ -252,19 +413,28 @@ window.__ModuleLoader__.load({
       patch(sessionId, changes) {
         const key = String(sessionId)
         this.store.update((state) => {
-          const current = state.bySession[key] ?? defaultEntry()
+          // Merge over a fresh default so an entry created before a field was
+          // added still gets every key the components read.
+          const current = { ...defaultEntry(), ...(state.bySession[key] ?? {}) }
           state.bySession = { ...state.bySession, [key]: { ...current, ...changes } }
         })
+        // Remember the choices, so the next dialog opens the way this one was
+        // left. Only the export options are habits; the directory, the file
+        // and the preview belong to the session that produced them.
+        if (changes.form !== undefined || changes.mode !== undefined) {
+          const next = this.entryOf(sessionId)
+          saveForm(next.form, next.mode)
+        }
       }
 
-      /** Open the dialog. */
+      /** Open the dialog on the export tab. */
       open(sessionId) {
-        this.patch(sessionId, { open: true, error: null })
+        this.patch(sessionId, { open: true, error: null, tab: 'export', impPreview: null, impError: null })
       }
 
       /** Close the dialog without cancelling an in-flight request. */
       close(sessionId) {
-        this.patch(sessionId, { open: false, error: null, preview: null })
+        this.patch(sessionId, { open: false, error: null, preview: null, impPreview: null, impError: null })
       }
 
       /** Set one form field. */
@@ -307,6 +477,9 @@ window.__ModuleLoader__.load({
         for (const key of ['thinking', 'tools', 'system', 'injected', 'timestamps', 'usage', 'scope', 'images', 'toolResultLimit']) {
           params.set(key, String(entry.form[key]))
         }
+        // A ZIP that cannot be re-imported is a trap: always carry the sidecar
+        // log when the chosen format is the bundle.
+        params.set('withLog', String(entry.form.format === 'zip' ? true : entry.form.withLog))
         return params
       }
 
@@ -375,6 +548,99 @@ window.__ModuleLoader__.load({
           this.patch(sessionId, { preview: await response.text(), previewLoading: false })
         } catch (error) {
           this.patch(sessionId, { previewLoading: false, error: messageOf(error) })
+        }
+      }
+
+      /** Switch the dialog between the export and import tabs. */
+      setTab(sessionId, tab) {
+        this.patch(sessionId, { tab, error: null, impError: null })
+      }
+
+      /** Read a chosen file into memory; nothing is sent until import runs. */
+      async chooseImportFile(sessionId, file) {
+        if (file === null || file === undefined) return
+        try {
+          const name = typeof file.name === 'string' ? file.name : ''
+          const lower = name.toLowerCase()
+          if (lower.endsWith('.zip')) {
+            // A ZIP is binary: base64 it in chunks so a multi-megabyte bundle
+            // does not blow the argument limit of String.fromCharCode.
+            const bytes = new Uint8Array(await file.arrayBuffer())
+            let binary = ''
+            const chunk = 0x8000
+            for (let index = 0; index < bytes.length; index += chunk) {
+              binary += String.fromCharCode.apply(null, bytes.subarray(index, index + chunk))
+            }
+            this.patch(sessionId, { impName: name, impText: '', impZip: btoa(binary), impKind: 'zip', impSize: typeof file.size === 'number' ? file.size : 0, impDragging: false, impPreview: null, impError: null })
+            return
+          }
+          const text = await file.text()
+          const kind = lower.endsWith('.jsonl') || lower.endsWith('.json')
+            ? 'log'
+            : lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.txt')
+              ? 'markdown'
+              : ''
+          this.patch(sessionId, { impName: name, impText: text, impZip: '', impKind: kind, impSize: typeof file.size === 'number' ? file.size : 0, impDragging: false, impPreview: null, impError: null })
+        } catch (error) {
+          this.patch(sessionId, { impError: messageOf(error) })
+        }
+      }
+
+      /** Highlight (or clear) the drop target while a file is dragged over it. */
+      setDragging(sessionId, value) {
+        this.patch(sessionId, { impDragging: value === true })
+      }
+
+      /** Set one import option (title or working directory). */
+      setImportField(sessionId, key, value) {
+        this.patch(sessionId, { [key]: value, impPreview: null, impError: null })
+      }
+
+      /** Dry-run or perform the import through the host route. */
+      async runImport(sessionId, dryRun) {
+        const entry = this.entryOf(sessionId)
+        const isZip = entry.impKind === 'zip'
+        const hasContent = isZip ? (entry.impZip ?? '') !== '' : (entry.impText ?? '').trim() !== ''
+        if (!hasContent) {
+          this.patch(sessionId, { impError: 'no-file' })
+          return
+        }
+        this.patch(sessionId, { impBusy: true, impError: null })
+        try {
+          const payload = isZip
+            ? {
+                zip: entry.impZip,
+                cwd: entry.impCwd === '' ? undefined : entry.impCwd,
+                title: entry.impTitle === '' ? undefined : entry.impTitle,
+                dryRun: dryRun === true,
+              }
+            : {
+                text: entry.impText,
+                kind: entry.impKind === '' ? undefined : entry.impKind,
+                cwd: entry.impCwd === '' ? undefined : entry.impCwd,
+                title: entry.impTitle === '' ? undefined : entry.impTitle,
+                dryRun: dryRun === true,
+              }
+          const response = await this.fetcher(isZip ? `${API}.import-zip` : `${API}.import`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          if (!response.ok) throw new Error(await failureText(response))
+          const result = await response.json()
+          if (dryRun === true) {
+            this.patch(sessionId, { impBusy: false, impPreview: result })
+          } else {
+            this.patch(sessionId, {
+              impBusy: false,
+              open: false,
+              tab: 'export',
+              impPreview: null,
+              notice: { kind: 'imported', title: result.title, count: result.eventCount },
+            })
+          }
+        } catch (error) {
+          this.patch(sessionId, { impBusy: false, impError: messageOf(error) })
         }
       }
 
@@ -467,91 +733,251 @@ window.__ModuleLoader__.load({
       })
     }
 
-    /** The export dialog for one session. */
-    function ExportDialog({ sessionId, entry, controller, t }) {
+    /** The two-tab switch at the top of the dialog. */
+    function TabRow({ tab, onChange, t }) {
+      return jsx('div', {
+        className: 'dshce-tabs',
+        role: 'tablist',
+        children: [
+          { value: 'export', label: 'tab.export' },
+          { value: 'import', label: 'tab.import' },
+        ].map((choice) =>
+          jsx(primitives.Pill, {
+            key: choice.value,
+            active: tab === choice.value,
+            role: 'tab',
+            'aria-selected': tab === choice.value,
+            onClick: () => onChange(choice.value),
+            children: t(choice.label),
+          }),
+        ),
+      })
+    }
+
+    /** The export tab's form. */
+    function ExportBody({ sessionId, entry, controller, t }) {
       const form = entry.form
       const set = (key, value) => controller.setField(sessionId, key, value)
-      if (!entry.open) return null
-      return jsx(primitives.Modal, {
-        open: true,
-        title: t('dialog.title'),
-        description: t('dialog.description'),
-        closeLabel: t('action.cancel'),
-        onClose: () => controller.close(sessionId),
-        footer: jsxs(Fragment, {
-          children: [
-            jsx(primitives.Button, {
-              variant: 'ghost',
-              size: 'md',
-              disabled: entry.busy,
-              onClick: () => controller.loadPreview(sessionId),
-              children: entry.preview === null ? t('preview.show') : t('preview.hide'),
-            }),
-            jsx(primitives.Button, {
-              variant: 'ghost',
-              size: 'md',
-              disabled: entry.busy,
-              onClick: () => controller.close(sessionId),
-              children: t('action.cancel'),
-            }),
-            jsx(primitives.Button, {
-              variant: 'primary',
-              size: 'md',
-              disabled: entry.busy || (entry.mode === 'save' && form.format === 'zip'),
-              onClick: () => (entry.mode === 'save' ? controller.saveToDirectory(sessionId) : controller.download(sessionId)),
-              children: entry.busy
-                ? t(entry.mode === 'save' ? 'action.saving' : 'action.exporting')
-                : t(entry.mode === 'save' ? 'action.save' : 'action.export'),
-            }),
-          ],
-        }),
+      return jsxs(Fragment, {
+        children: [
+          jsxs('div', {
+            className: 'dshce-group',
+            children: [
+              jsx('p', { className: 'dshce-group-title', children: t('field.format') }),
+              jsx(ChoiceRow, {
+                t,
+                value: form.format,
+                onChange: (value) => set('format', value),
+                choices: [
+                  { value: 'md', label: 'format.md', hint: 'format.md.hint' },
+                  { value: 'html', label: 'format.html', hint: 'format.html.hint' },
+                  { value: 'zip', label: 'format.zip', hint: 'format.zip.hint' },
+                  { value: 'txt', label: 'format.txt', hint: 'format.txt.hint' },
+                  { value: 'log', label: 'format.log', hint: 'format.log.hint' },
+                ],
+              }),
+            ],
+          }),
+          jsxs('div', {
+            className: 'dshce-group',
+            children: [
+              jsx('p', { className: 'dshce-group-title', children: t('field.scope') }),
+              jsx(ChoiceRow, {
+                t,
+                value: form.scope,
+                onChange: (value) => set('scope', value),
+                choices: [
+                  { value: 'full', label: 'scope.full', hint: 'scope.full.hint' },
+                  { value: 'surface', label: 'scope.surface', hint: 'scope.surface.hint' },
+                ],
+              }),
+              jsxs('div', {
+                className: 'dshce-group',
+                style: { marginTop: '12px' },
+                children: [
+                  jsx('p', { className: 'dshce-group-title', children: t('field.images') }),
+                  jsx(ChoiceRow, {
+                    t,
+                    value: form.images,
+                    onChange: (value) => set('images', value),
+                    choices: [
+                      { value: 'auto', label: 'images.auto', hint: 'images.auto.hint' },
+                      { value: 'embed', label: 'images.embed' },
+                      { value: 'none', label: 'images.none' },
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          }),
+          jsxs('div', {
+            className: 'dshce-group',
+            children: [
+              jsx('p', { className: 'dshce-group-title', children: t('field.content') }),
+              jsxs('div', {
+                className: 'dshce-switches',
+                children: [
+                  // The four that are the conversation, in reading order.
+                  jsx(SwitchRow, { t, labelKey: 'content.userInput', checked: form.userInput, onChange: (v) => set('userInput', v) }),
+                  jsx(SwitchRow, { t, labelKey: 'content.modelOutput', checked: form.modelOutput, onChange: (v) => set('modelOutput', v) }),
+                  jsx(SwitchRow, { t, labelKey: 'content.thinking', checked: form.thinking, onChange: (v) => set('thinking', v) }),
+                  jsx(SwitchRow, { t, labelKey: 'content.system', checked: form.system, onChange: (v) => set('system', v) }),
+                  jsx(SwitchRow, { t, labelKey: 'content.tools', checked: form.tools, onChange: (v) => set('tools', v) }),
+                  jsx(SwitchRow, { t, labelKey: 'content.injected', checked: form.injected, onChange: (v) => set('injected', v) }),
+                  jsx(SwitchRow, { t, labelKey: 'content.timestamps', checked: form.timestamps, onChange: (v) => set('timestamps', v) }),
+                  jsx(SwitchRow, { t, labelKey: 'content.usage', checked: form.usage, onChange: (v) => set('usage', v) }),
+                ],
+              }),
+            ],
+          }),
+          jsxs('div', {
+            className: 'dshce-group',
+            children: [
+              jsx('p', { className: 'dshce-group-title', children: t('field.output') }),
+              jsx(ChoiceRow, {
+                t,
+                value: entry.mode,
+                onChange: (value) => controller.patch(sessionId, { mode: value, error: null }),
+                choices: [
+                  { value: 'download', label: 'output.download' },
+                  { value: 'save', label: 'output.save' },
+                ],
+              }),
+              entry.mode === 'save'
+                ? jsx(primitives.Input, {
+                    className: 'dshce-input',
+                    value: entry.directory,
+                    placeholder: t('output.save.placeholder'),
+                    onChange: (event) => controller.patch(sessionId, { directory: event.target.value }),
+                  })
+                : null,
+            ],
+          }),
+          entry.previewLoading || entry.preview !== null
+            ? jsx('div', {
+                className: 'dshce-group',
+                children: jsx('pre', {
+                  className: 'dshce-preview',
+                  children: entry.previewLoading ? t('preview.loading') : entry.preview || t('preview.empty'),
+                }),
+              })
+            : null,
+          entry.error === null
+            ? null
+            : jsx('p', {
+                className: 'dshce-error',
+                role: 'status',
+                children: entry.error === 'save-zip' ? t('error.save-zip') : format(t('error.generic'), { message: entry.error }),
+              }),
+        ],
+      })
+    }
+
+    /** The export tab's footer buttons. */
+    function ExportFooter({ sessionId, entry, controller, t }) {
+      const form = entry.form
+      return jsxs(Fragment, {
+        children: [
+          jsx(primitives.Button, {
+            variant: 'ghost',
+            size: 'md',
+            disabled: entry.busy,
+            onClick: () => controller.loadPreview(sessionId),
+            children: entry.preview === null ? t('preview.show') : t('preview.hide'),
+          }),
+          jsx(primitives.Button, {
+            variant: 'ghost',
+            size: 'md',
+            disabled: entry.busy,
+            onClick: () => controller.close(sessionId),
+            children: t('action.cancel'),
+          }),
+          jsx(primitives.Button, {
+            variant: 'primary',
+            size: 'md',
+            disabled: entry.busy || (entry.mode === 'save' && form.format === 'zip'),
+            onClick: () => (entry.mode === 'save' ? controller.saveToDirectory(sessionId) : controller.download(sessionId)),
+            children: entry.busy
+              ? t(entry.mode === 'save' ? 'action.saving' : 'action.exporting')
+              : t(entry.mode === 'save' ? 'action.save' : 'action.export'),
+          }),
+        ],
+      })
+    }
+
+    /** The import tab's form. */
+    function ImportBody({ sessionId, entry, controller, t }) {
+      const preview = entry.impPreview ?? null
+      const name = entry.impName ?? ''
+      const hasFile = name !== ''
+      const dragging = entry.impDragging === true
+      const onDragOver = (event) => {
+        event.preventDefault()
+        if (event.dataTransfer !== null && event.dataTransfer !== undefined) event.dataTransfer.dropEffect = 'copy'
+        if (!dragging) controller.setDragging(sessionId, true)
+      }
+      const onDragLeave = (event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) controller.setDragging(sessionId, false)
+      }
+      const onDrop = (event) => {
+        event.preventDefault()
+        controller.setDragging(sessionId, false)
+        const file = event.dataTransfer?.files?.[0]
+        if (file !== null && file !== undefined) controller.chooseImportFile(sessionId, file)
+      }
+      return jsx('div', {
+        className: 'dshce-import-body',
+        onDragOver,
+        onDragLeave,
+        onDrop,
         children: jsxs(Fragment, {
           children: [
             jsxs('div', {
               className: 'dshce-group',
               children: [
-                jsx('p', { className: 'dshce-group-title', children: t('field.format') }),
-                jsx(ChoiceRow, {
-                  t,
-                  value: form.format,
-                  onChange: (value) => set('format', value),
-                  choices: [
-                    { value: 'md', label: 'format.md', hint: 'format.md.hint' },
-                    { value: 'html', label: 'format.html', hint: 'format.html.hint' },
-                    { value: 'zip', label: 'format.zip', hint: 'format.zip.hint' },
-                    { value: 'txt', label: 'format.txt', hint: 'format.txt.hint' },
-                    { value: 'log', label: 'format.log', hint: 'format.log.hint' },
-                  ],
-                }),
-              ],
-            }),
-            jsxs('div', {
-              className: 'dshce-group',
-              children: [
-                jsx('p', { className: 'dshce-group-title', children: t('field.scope') }),
-                jsx(ChoiceRow, {
-                  t,
-                  value: form.scope,
-                  onChange: (value) => set('scope', value),
-                  choices: [
-                    { value: 'full', label: 'scope.full', hint: 'scope.full.hint' },
-                    { value: 'surface', label: 'scope.surface', hint: 'scope.surface.hint' },
-                  ],
-                }),
-                jsxs('div', {
-                  className: 'dshce-group',
-                  style: { marginTop: '12px' },
+                jsx('p', { className: 'dshce-group-title', children: t('import.field.source') }),
+                // The whole tab is a drop target; this label is the click target
+                // and the visual affordance. The input is clipped, not hidden,
+                // so a click anywhere on the label still opens the picker.
+                jsxs('label', {
+                  className: 'dshce-dropzone' + (dragging ? ' dshce-dropzone-active' : ''),
                   children: [
-                    jsx('p', { className: 'dshce-group-title', children: t('field.images') }),
-                    jsx(ChoiceRow, {
-                      t,
-                      value: form.images,
-                      onChange: (value) => set('images', value),
-                      choices: [
-                        { value: 'auto', label: 'images.auto', hint: 'images.auto.hint' },
-                        { value: 'embed', label: 'images.embed' },
-                        { value: 'none', label: 'images.none' },
+                    jsx('input', {
+                      type: 'file',
+                      className: 'dshce-file-input',
+                      accept: '.jsonl,.json,.md,.markdown,.txt,.zip,text/plain,application/json,application/zip',
+                      onChange: (event) => {
+                        controller.chooseImportFile(sessionId, event.target.files?.[0])
+                        // Reset so choosing the same file again still fires.
+                        event.target.value = ''
+                      },
+                    }),
+                    jsx('svg', {
+                      className: 'dshce-dropzone-icon',
+                      viewBox: '0 0 24 24',
+                      fill: 'none',
+                      stroke: 'currentColor',
+                      strokeWidth: 1.6,
+                      strokeLinecap: 'round',
+                      strokeLinejoin: 'round',
+                      'aria-hidden': 'true',
+                      children: [
+                        jsx('path', { d: 'M12 3v10' }),
+                        jsx('path', { d: 'm7 9 5 5 5-5' }),
+                        jsx('path', { d: 'M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2' }),
                       ],
+                    }),
+                    jsx('span', {
+                      className: 'dshce-dropzone-title',
+                      children: dragging ? t('import.dropzone.active') : hasFile ? name : t('import.dropzone'),
+                    }),
+                    jsx('span', {
+                      className: 'dshce-dropzone-hint',
+                      children: dragging
+                        ? t('import.dropzone.active.hint')
+                        : hasFile
+                          ? `${formatBytes(entry.impSize ?? 0)} · ${t('import.dropzone.replace')}`
+                          : t('import.dropzone.hint'),
                     }),
                   ],
                 }),
@@ -560,62 +986,110 @@ window.__ModuleLoader__.load({
             jsxs('div', {
               className: 'dshce-group',
               children: [
-                jsx('p', { className: 'dshce-group-title', children: t('field.content') }),
-                jsxs('div', {
-                  className: 'dshce-switches',
-                  children: [
-                    // The four that are the conversation, in reading order.
-                    jsx(SwitchRow, { t, labelKey: 'content.userInput', checked: form.userInput, onChange: (v) => set('userInput', v) }),
-                    jsx(SwitchRow, { t, labelKey: 'content.modelOutput', checked: form.modelOutput, onChange: (v) => set('modelOutput', v) }),
-                    jsx(SwitchRow, { t, labelKey: 'content.thinking', checked: form.thinking, onChange: (v) => set('thinking', v) }),
-                    jsx(SwitchRow, { t, labelKey: 'content.system', checked: form.system, onChange: (v) => set('system', v) }),
-                    jsx(SwitchRow, { t, labelKey: 'content.tools', checked: form.tools, onChange: (v) => set('tools', v) }),
-                    jsx(SwitchRow, { t, labelKey: 'content.injected', checked: form.injected, onChange: (v) => set('injected', v) }),
-                    jsx(SwitchRow, { t, labelKey: 'content.timestamps', checked: form.timestamps, onChange: (v) => set('timestamps', v) }),
-                    jsx(SwitchRow, { t, labelKey: 'content.usage', checked: form.usage, onChange: (v) => set('usage', v) }),
-                  ],
+                jsx('p', { className: 'dshce-group-title', children: t('import.field.options') }),
+                jsx('span', { className: 'dshce-field-label', children: t('import.title.label') }),
+                jsx(primitives.Input, {
+                  className: 'dshce-input',
+                  value: entry.impTitle ?? '',
+                  placeholder: t('import.title.placeholder'),
+                  onChange: (event) => controller.setImportField(sessionId, 'impTitle', event.target.value),
+                }),
+                jsx('span', { className: 'dshce-field-label', children: t('import.cwd.label') }),
+                jsx(primitives.Input, {
+                  className: 'dshce-input',
+                  value: entry.impCwd ?? '',
+                  placeholder: t('import.cwd.placeholder'),
+                  onChange: (event) => controller.setImportField(sessionId, 'impCwd', event.target.value),
                 }),
               ],
             }),
-            jsxs('div', {
-              className: 'dshce-group',
-              children: [
-                jsx('p', { className: 'dshce-group-title', children: t('field.output') }),
-                jsx(ChoiceRow, {
-                  t,
-                  value: entry.mode,
-                  onChange: (value) => controller.patch(sessionId, { mode: value, error: null }),
-                  choices: [
-                    { value: 'download', label: 'output.download' },
-                    { value: 'save', label: 'output.save' },
-                  ],
-                }),
-                entry.mode === 'save'
-                  ? jsx(primitives.Input, {
-                      className: 'dshce-input',
-                      value: entry.directory,
-                      placeholder: t('output.save.placeholder'),
-                      onChange: (event) => controller.patch(sessionId, { directory: event.target.value }),
-                    })
-                  : null,
-              ],
-            }),
-            entry.previewLoading || entry.preview !== null
-              ? jsx('div', {
+            preview !== null
+              ? jsxs('div', {
                   className: 'dshce-group',
-                  children: jsx('pre', {
-                    className: 'dshce-preview',
-                    children: entry.previewLoading ? t('preview.loading') : entry.preview || t('preview.empty'),
-                  }),
+                  children: [
+                    jsx('p', {
+                      className: 'dshce-group-title',
+                      children: format(t('import.preview.title'), {
+                        kind: preview.kind === 'log' ? t('import.kind.log') : t('import.kind.markdown'),
+                        title: preview.title || t('import.preview.untitled'),
+                        count: preview.eventCount,
+                      }),
+                    }),
+                    (preview.warnings ?? []).length === 0
+                      ? null
+                      : jsx('ul', {
+                          className: 'dshce-warnings',
+                          children: preview.warnings.map((warning, index) => jsx('li', { key: index, children: warning })),
+                        }),
+                  ],
                 })
               : null,
-            entry.error === null
+            entry.impError === null || entry.impError === undefined
               ? null
               : jsx('p', {
                   className: 'dshce-error',
                   role: 'status',
-                  children: entry.error === 'save-zip' ? t('error.save-zip') : format(t('error.generic'), { message: entry.error }),
+                  children:
+                    entry.impError === 'no-file'
+                      ? t('import.error.noFile')
+                      : format(t('error.import'), { message: entry.impError }),
                 }),
+          ],
+        }),
+      })
+    }
+
+    /** The import tab's footer buttons. */
+    function ImportFooter({ sessionId, entry, controller, t }) {
+      const hasFile = (entry.impText ?? '') !== '' || (entry.impZip ?? '') !== ''
+      const busy = entry.impBusy === true
+      return jsxs(Fragment, {
+        children: [
+          jsx(primitives.Button, {
+            variant: 'ghost',
+            size: 'md',
+            disabled: busy || !hasFile,
+            onClick: () => controller.runImport(sessionId, true),
+            children: t('import.preview.show'),
+          }),
+          jsx(primitives.Button, {
+            variant: 'ghost',
+            size: 'md',
+            disabled: busy,
+            onClick: () => controller.close(sessionId),
+            children: t('action.cancel'),
+          }),
+          jsx(primitives.Button, {
+            variant: 'primary',
+            size: 'md',
+            disabled: busy || !hasFile,
+            onClick: () => controller.runImport(sessionId, false),
+            children: busy ? t('action.importing') : t('action.import'),
+          }),
+        ],
+      })
+    }
+
+    /** The one dialog behind the header button: export and import tabs. */
+    function ExportDialog({ sessionId, entry, controller, t }) {
+      if (!entry.open) return null
+      const tab = entry.tab ?? 'export'
+      const isImport = tab === 'import'
+      return jsx(primitives.Modal, {
+        open: true,
+        title: t(isImport ? 'import.dialog.title' : 'dialog.title'),
+        description: t(isImport ? 'import.dialog.description' : 'dialog.description'),
+        closeLabel: t('action.cancel'),
+        onClose: () => controller.close(sessionId),
+        footer: isImport
+          ? jsx(ImportFooter, { sessionId, entry, controller, t })
+          : jsx(ExportFooter, { sessionId, entry, controller, t }),
+        children: jsxs(Fragment, {
+          children: [
+            jsx(TabRow, { tab, onChange: (value) => controller.setTab(sessionId, value), t }),
+            isImport
+              ? jsx(ImportBody, { sessionId, entry, controller, t })
+              : jsx(ExportBody, { sessionId, entry, controller, t }),
           ],
         }),
       })
@@ -638,17 +1112,36 @@ window.__ModuleLoader__.load({
             'aria-label': t('action.label'),
             title: t('action.title'),
             onClick: () => controller.open(sessionId),
-            children: jsx(primitives.IconShareOutlineRegular, {}),
+            // Two halves of one glyph: top is the share icon as-is (export),
+            // bottom is the same path rotated 180° (import) — one icon, both
+            // directions, and it still sits in the 15px box the old icon used.
+            children: jsx('span', {
+              className: 'dshce-header-icon',
+              children: [
+                jsx('span', {
+                  key: 'out',
+                  className: 'dshce-header-icon-half',
+                  children: jsx(primitives.IconShareOutlineRegular, {}),
+                }),
+                jsx('span', {
+                  key: 'in',
+                  className: 'dshce-header-icon-half dshce-header-icon-flip',
+                  children: jsx(primitives.IconShareOutlineRegular, {}),
+                }),
+              ],
+            }),
           }),
           jsx(ExportDialog, { sessionId, entry, controller, t }),
           notice === null || notice === undefined
             ? null
             : jsx(primitives.Toast, {
-                key: `${notice.kind}:${notice.name ?? notice.path ?? ''}`,
+                key: `${notice.kind}:${notice.name ?? notice.path ?? notice.title ?? ''}`,
                 text:
                   notice.kind === 'saved'
                     ? format(t('notice.saved'), { path: notice.path })
-                    : format(t('notice.downloaded'), { name: notice.name }),
+                    : notice.kind === 'imported'
+                      ? format(t('notice.imported'), { title: notice.title ?? '', count: notice.count ?? 0 })
+                      : format(t('notice.downloaded'), { name: notice.name }),
                 onDone: () => controller.clearNotice(sessionId),
               }),
         ],

@@ -362,6 +362,115 @@ describe('ChatExportController', () => {
     controller.dispose()
     expect(controller.store.getSnapshot().bySession).toEqual({})
   })
+
+  it('switches tabs and resets to export on open', async () => {
+    const controller = new loaded.exports.ChatExportController()
+    controller.setTab('s1', 'import')
+    expect(controller.entryOf('s1').tab).toBe('import')
+    controller.open('s1')
+    expect(controller.entryOf('s1').tab).toBe('export')
+  })
+
+  it('reads a chosen file and detects its kind from the extension', async () => {
+    const controller = new loaded.exports.ChatExportController()
+    await controller.chooseImportFile('s1', { name: 'log.JSONL', text: async () => '{"type":"x"}' })
+    const entry = controller.entryOf('s1')
+    expect(entry.impName).toBe('log.JSONL')
+    expect(entry.impText).toBe('{"type":"x"}')
+    expect(entry.impKind).toBe('log')
+    expect(entry.impPreview).toBeNull()
+
+    await controller.chooseImportFile('s1', { name: 'note.md', text: async () => '# hi' })
+    expect(controller.entryOf('s1').impKind).toBe('markdown')
+  })
+
+  it('dry-runs an import and stores the plan without closing', async () => {
+    const fetchImpl = stubFetch(() =>
+      response({ ok: true, dryRun: true, kind: 'log', title: 'T', eventCount: 3, warnings: ['w'] }),
+    )
+    const controller = new loaded.exports.ChatExportController(fetchImpl, () => {})
+    controller.open('s1')
+    await controller.chooseImportFile('s1', { name: 'x.jsonl', text: async () => '{"type":"x"}' })
+    controller.setImportField('s1', 'impTitle', '我的标题')
+    await controller.runImport('s1', true)
+    expect(fetchImpl.calls[0].url).toBe('/api/dsh-chat-export.import')
+    const body = JSON.parse(fetchImpl.calls[0].init.body)
+    expect(body.dryRun).toBe(true)
+    expect(body.text).toBe('{"type":"x"}')
+    expect(body.kind).toBe('log')
+    expect(body.title).toBe('我的标题')
+    const entry = controller.entryOf('s1')
+    expect(entry.impPreview.eventCount).toBe(3)
+    expect(entry.open).toBe(true)
+    expect(entry.impBusy).toBe(false)
+  })
+
+  it('performs the import, closes the dialog, and reports it', async () => {
+    const fetchImpl = stubFetch(() =>
+      response({ ok: true, dryRun: false, kind: 'log', title: '导入的历史', eventCount: 42, attached: true }),
+    )
+    const controller = new loaded.exports.ChatExportController(fetchImpl, () => {})
+    controller.open('s1')
+    await controller.chooseImportFile('s1', { name: 'x.jsonl', text: async () => '{"type":"x"}' })
+    await controller.runImport('s1', false)
+    const entry = controller.entryOf('s1')
+    expect(entry.open).toBe(false)
+    expect(entry.notice).toEqual({ kind: 'imported', title: '导入的历史', count: 42 })
+  })
+
+  it('refuses to import with no file and never calls the host', async () => {
+    const fetchImpl = stubFetch(() => response({ ok: true }))
+    const controller = new loaded.exports.ChatExportController(fetchImpl, () => {})
+    controller.open('s1')
+    await controller.runImport('s1', false)
+    expect(fetchImpl.calls).toHaveLength(0)
+    expect(controller.entryOf('s1').impError).toBe('no-file')
+  })
+
+  it('surfaces an import failure and keeps the dialog open', async () => {
+    const fetchImpl = stubFetch(() => response({ error: '这份文件里没有会话事件' }, { ok: false, status: 400 }))
+    const controller = new loaded.exports.ChatExportController(fetchImpl, () => {})
+    controller.open('s1')
+    await controller.chooseImportFile('s1', { name: 'x.jsonl', text: async () => 'x' })
+    await controller.runImport('s1', false)
+    const entry = controller.entryOf('s1')
+    expect(entry.impError).toContain('没有会话事件')
+    expect(entry.impBusy).toBe(false)
+    expect(entry.open).toBe(true)
+  })
+
+  it('base64-encodes a chosen ZIP and marks it as zip', async () => {
+    const controller = new loaded.exports.ChatExportController()
+    const bytes = new Uint8Array([80, 75, 3, 4, 1, 2, 3])
+    await controller.chooseImportFile('s1', {
+      name: 'bundle.zip',
+      arrayBuffer: async () => bytes.buffer,
+      text: async () => { throw new Error('a zip must not be read as text') },
+    })
+    const entry = controller.entryOf('s1')
+    expect(entry.impKind).toBe('zip')
+    expect(entry.impText).toBe('')
+    expect(entry.impZip).toBe(btoa(String.fromCharCode(...bytes)))
+  })
+
+  it('tracks the drop highlight', async () => {
+    const controller = new loaded.exports.ChatExportController()
+    controller.setDragging('s1', true)
+    expect(controller.entryOf('s1').impDragging).toBe(true)
+    controller.setDragging('s1', false)
+    expect(controller.entryOf('s1').impDragging).toBe(false)
+  })
+
+  it('posts a zip to the import-zip route', async () => {
+    const fetchImpl = stubFetch(() => response({ ok: true, dryRun: false, kind: 'log', title: 'T', eventCount: 2, assets: 1 }))
+    const controller = new loaded.exports.ChatExportController(fetchImpl, () => {})
+    controller.open('s1')
+    controller.patch('s1', { impKind: 'zip', impZip: 'AAAA' })
+    await controller.runImport('s1', false)
+    expect(fetchImpl.calls[0].url).toBe('/api/dsh-chat-export.import-zip')
+    expect(JSON.parse(fetchImpl.calls[0].init.body).zip).toBe('AAAA')
+    expect(controller.entryOf('s1').notice).toEqual({ kind: 'imported', title: 'T', count: 2 })
+  })
 })
 
 describe('the Session-header entry point', () => {
@@ -388,9 +497,17 @@ describe('the Session-header entry point', () => {
     expect(button.type).toBe('Button')
   })
 
-  it('carries the share icon and no visible text label', async () => {
+  it('stacks the share icon and its 180° mirror, with no visible text label', async () => {
     const button = await renderHeaderAction()
-    expect(button.children.type).toBe('IconShareOutlineRegular')
+    const stack = button.children
+    expect(stack.type).toBe('span')
+    expect(stack.props.className).toBe('dshce-header-icon')
+    expect(stack.children).toHaveLength(2)
+    // Top half: the share glyph as-is (export). Bottom half: the same glyph
+    // rotated 180° (import), so one icon carries both directions.
+    expect(stack.children[0].children.type).toBe('IconShareOutlineRegular')
+    expect(stack.children[1].children.type).toBe('IconShareOutlineRegular')
+    expect(stack.children[1].props.className).toContain('dshce-header-icon-flip')
     // The label survives only as the accessible name and the tooltip; a text
     // child here would turn the square icon button back into a labelled pill.
     expect(button.props['aria-label']).toBe('action.label')
@@ -483,5 +600,62 @@ describe('default agreement with the host', () => {
       expect(host[key], key).toBe(value)
     }
     expect(Object.keys(client).sort()).toEqual(Object.keys(host).sort())
+  })
+})
+
+describe('remembering the dialog options', () => {
+  /** A `localStorage` the bundle can use, backed by a Map. */
+  function stubStorage() {
+    const map = new Map()
+    globalThis.window.localStorage = {
+      getItem: (key) => (map.has(key) ? map.get(key) : null),
+      setItem: (key, value) => map.set(key, String(value)),
+      removeItem: (key) => map.delete(key),
+    }
+    return map
+  }
+
+  it('reopens with the last chosen format, switches, and output mode', async () => {
+    const loaded = await loadClient()
+    stubStorage()
+    const first = new loaded.exports.ChatExportController(stubFetch(() => response('x')), () => {})
+    first.setField('s1', 'format', 'html')
+    first.setField('s1', 'tools', true)
+    first.patch('s1', { mode: 'save' })
+
+    // A second controller stands in for reopening the dialog later.
+    const second = new loaded.exports.ChatExportController(stubFetch(() => response('x')), () => {})
+    const entry = second.entryOf('s1')
+    expect(entry.form.format).toBe('html')
+    expect(entry.form.tools).toBe(true)
+    expect(entry.mode).toBe('save')
+  })
+
+  it('ignores a corrupt saved payload', async () => {
+    const loaded = await loadClient()
+    const map = stubStorage()
+    map.set('dsh-chat-export.form.v1', 'null')
+    const controller = new loaded.exports.ChatExportController(stubFetch(() => response('x')), () => {})
+    expect(controller.entryOf('s1').form.format).toBe('md')
+  })
+
+  it('drops saved fields it does not recognise or that changed type', async () => {
+    const loaded = await loadClient()
+    const map = stubStorage()
+    map.set('dsh-chat-export.form.v1', JSON.stringify({ form: { format: 'html', tools: 'yes', removed: 1 } }))
+    const controller = new loaded.exports.ChatExportController(stubFetch(() => response('x')), () => {})
+    const form = controller.entryOf('s1').form
+    expect(form.format).toBe('html')
+    expect(form.tools).toBe(false)
+    expect('removed' in form).toBe(false)
+  })
+
+  it('still opens on the defaults when storage is unavailable', async () => {
+    const loaded = await loadClient()
+    delete globalThis.window.localStorage
+    const controller = new loaded.exports.ChatExportController(stubFetch(() => response('x')), () => {})
+    expect(controller.entryOf('s1').form.format).toBe('md')
+    // Writing must not throw either.
+    expect(() => controller.setField('s1', 'format', 'txt')).not.toThrow()
   })
 })
