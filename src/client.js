@@ -198,6 +198,29 @@ window.__ModuleLoader__.load({
 
     // --- style ----------------------------------------------------------------
 
+    /** The eight drag directions, clockwise from the top edge. */
+    const DIRECTIONS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
+
+    /**
+     * The resize cursor for each direction.
+     *
+     * `nwse-resize` points along the NW-SE diagonal, so it belongs to the
+     * top-left and bottom-right corners; `nesw-resize` is the other diagonal
+     * (top-right and bottom-left). Swapping the two is invisible in review and
+     * immediately obvious the moment you hover the wrong corner, so the mapping
+     * lives in one table that a test can check.
+     */
+    const HANDLE_CURSORS = {
+      n: 'ns-resize',
+      s: 'ns-resize',
+      e: 'ew-resize',
+      w: 'ew-resize',
+      ne: 'nesw-resize',
+      sw: 'nesw-resize',
+      nw: 'nwse-resize',
+      se: 'nwse-resize',
+    }
+
     const CSS = [
       // Square icon button, sized exactly like the harness's own Session-header
       // icon button so the two sit in one row without looking mismatched.
@@ -242,14 +265,16 @@ window.__ModuleLoader__.load({
       // Handles sit just inside the edge: the dialog clips its own overflow, so
       // anything positioned outside the box would be cut off.
       '.dshce-rz{position:absolute;z-index:5;touch-action:none}',
-      '.dshce-rz-n{top:0;left:18px;right:18px;height:7px;cursor:ns-resize}',
-      '.dshce-rz-s{bottom:0;left:18px;right:18px;height:7px;cursor:ns-resize}',
-      '.dshce-rz-e{right:0;top:18px;bottom:18px;width:7px;cursor:ew-resize}',
-      '.dshce-rz-w{left:0;top:18px;bottom:18px;width:7px;cursor:ew-resize}',
-      '.dshce-rz-ne{top:0;right:0;width:14px;height:14px;cursor:nesw-resize}',
-      '.dshce-rz-nw{top:0;left:0;width:14px;height:14px;cursor:nwse-resize}',
-      '.dshce-rz-se{bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize}',
-      '.dshce-rz-sw{bottom:0;left:0;width:14px;height:14px;cursor:nwse-resize}',
+      '.dshce-rz-n{top:0;left:18px;right:18px;height:7px}',
+      '.dshce-rz-s{bottom:0;left:18px;right:18px;height:7px}',
+      '.dshce-rz-e{right:0;top:18px;bottom:18px;width:7px}',
+      '.dshce-rz-w{left:0;top:18px;bottom:18px;width:7px}',
+      '.dshce-rz-ne{top:0;right:0;width:14px;height:14px}',
+      '.dshce-rz-nw{top:0;left:0;width:14px;height:14px}',
+      '.dshce-rz-se{bottom:0;right:0;width:14px;height:14px}',
+      '.dshce-rz-sw{bottom:0;left:0;width:14px;height:14px}',
+      // Generated from HANDLE_CURSORS so the diagonal mapping cannot drift.
+      ...DIRECTIONS.map((direction) => `.dshce-rz-${direction}{cursor:${HANDLE_CURSORS[direction]}}`),
       // One visible grip so the dialog does not look inert; the rest are hit areas.
       '.dshce-rz-se::after{content:"";position:absolute;right:2px;bottom:2px;width:6px;height:6px;border-right:2px solid var(--dsw-alias-label-tertiary,#b9bcc2);border-bottom:2px solid var(--dsw-alias-label-tertiary,#b9bcc2);border-radius:1px;opacity:.6;pointer-events:none}',
       '.dshce-rz-se:hover::after{opacity:1}',
@@ -1096,8 +1121,6 @@ window.__ModuleLoader__.load({
     const SIZE_KEY = 'dsh-chat-export.dialog.v1'
     const MIN_DIALOG_W = 460
     const MIN_DIALOG_H = 320
-    /** The eight drag directions, clockwise from the top edge. */
-    const DIRECTIONS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
 
     /** Keep a number inside a range. */
     function clamp(value, min, max) {
@@ -1365,9 +1388,10 @@ window.__ModuleLoader__.load({
     exports.ChatExportController = ChatExportController
     exports.defaultForm = defaultForm
     exports.filenameOf = filenameOf
-    // Exposed for the resize test: the drag maths is the only part of the
-    // dialog that can be checked without a DOM.
+    // Exposed for the resize test: the drag maths and the cursor table are the
+    // only parts of the dialog that can be checked without a DOM.
     exports.resizedBox = resizedBox
+    exports.HANDLE_CURSORS = HANDLE_CURSORS
     return module.exports
   },
 })

@@ -240,6 +240,141 @@ describe('ask_user_question cards', () => {
   })
 })
 
+describe('questions asked from inside a run_code program', () => {
+  // The shape a PTC-style preset produces: `ask_user_question` is not callable
+  // at the top level, so the program calls it and returns the answers itself,
+  // under a key of its own choosing.
+  const code = [
+    'const fs = await import("node:fs/promises");',
+    'const questionRes = await tools.ask_user_question({',
+    '  questions: [',
+    '    {',
+    '      id: "branch_1_release_age",',
+    '      header: "分支 1 决策：发布等待期策略与强制参数",',
+    '      question: "是否将发布等待期强制跳过参数移植到脚本版？",',
+    '      options: [',
+    '        { label: "移植该分支（推荐）", description: "勾选强制升级时自动附加参数。" },',
+    '        { label: "暂不移植该分支", description: "保持现状。" }',
+    '      ]',
+    '    }',
+    '  ]',
+    '});',
+    'return { userAnswer: questionRes.answers };',
+  ].join('\n')
+  const args = JSON.stringify({ code, description: 'Compare and ask', timeoutMs: 600000 })
+  const answered = `${JSON.stringify({
+    releaseAgeDef: '',
+    userAnswer: [{ id: 'branch_1_release_age', selected: ['移植该分支（推荐）'] }],
+  })}\nFile sandbox enforcement is partial on this host.`
+
+  function run(seq, callId, result) {
+    const events = [turnStart(0, 1), toolCallEvent(1, callId, 'run_code', args)]
+    if (result !== undefined) events.push(toolResultEvent(2, callId, result))
+    return render(events, { tools: true })
+  }
+
+  it('renders the question card above the call that asked it', () => {
+    const html = run(1, 'c', answered)
+    expect(html).toContain('<details class="ask" open>')
+    expect(html).toContain('分支 1 决策：发布等待期策略与强制参数')
+    expect(html).toContain('是否将发布等待期强制跳过参数移植到脚本版？')
+    expect(html).toContain('1/1 已回答')
+    // The picked option is marked, the other one is not.
+    expect(html).toContain('<li class="opt sel"><div class="lbl">移植该分支（推荐）</div>')
+    expect(html).toContain('<li class="opt"><div class="lbl">暂不移植该分支</div>')
+    // The call itself is still there, below the card.
+    expect(html.indexOf('class="ask"')).toBeLessThan(html.indexOf('<details class="tool"'))
+  })
+
+  it('still shows the questions when the program did not return the answers', () => {
+    const html = run(1, 'c', '{"ok":true}')
+    expect(html).toContain('未记录回答')
+    expect(html).toContain('是否将发布等待期强制跳过参数移植到脚本版？')
+    expect(html).not.toContain('class="opt sel"')
+  })
+
+  it('finds answers under any key, not just a fixed one', () => {
+    const html = run(1, 'c', JSON.stringify({ anything: { nested: [{ id: 'branch_1_release_age', selected: ['暂不移植该分支'] }] } }))
+    expect(html).toContain('1/1 已回答')
+    expect(html).toContain('<li class="opt sel"><div class="lbl">暂不移植该分支</div>')
+  })
+
+  it('leaves a program without a question alone', () => {
+    const plain = JSON.stringify({ code: 'const x = await fs.readFile("a"); return x;' })
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'run_code', plain)]
+    const html = render(events, { tools: true })
+    expect(html).not.toContain('class="ask"')
+    expect(html).toContain('<details class="tool">')
+  })
+
+  it('falls back rather than guessing when the literal is not readable', () => {
+    // The question set is a variable, so there is nothing static to read.
+    const dynamic = JSON.stringify({ code: 'const qs = buildQuestions(); await tools.ask_user_question({ questions: qs });' })
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'run_code', dynamic)]
+    const html = render(events, { tools: true })
+    expect(html).not.toContain('class="ask"')
+    expect(html).toContain('<details class="tool">')
+  })
+})
+
+describe('content headings', () => {
+  it('gives every demoted level an explicit size', () => {
+    const html = render([], {}, {})
+    // The renderer maps `#`..`###` to h4..h6 so the turn/message outline stays
+    // the document skeleton; unstyled levels fall back to ~10px browser text.
+    for (const level of ['h4', 'h5', 'h6']) {
+      expect(html, `${level} rule`).toMatch(new RegExp(`${level}\\{font-size:\\d`))
+    }
+  })
+
+  it('renders ### as h6 rather than dropping the heading', () => {
+    expect(renderMarkdownBody('### 小标题')).toBe('<h6>小标题</h6>')
+  })
+})
+
+describe('row titles', () => {
+  it('previews a reasoning block with its first line', () => {
+    const events = [turnStart(0, 1), assistantMessage(1, [reasoning('核对分支二的条件。\n第二行不该出现在标题里。')])]
+    const html = render(events, { thinking: true })
+    expect(html).toContain('<summary>思考 · 核对分支二的条件。（')
+    expect(html).not.toContain('思考 · 核对分支二的条件。第二行')
+  })
+
+  it('falls back to the character count when there is nothing to preview', () => {
+    const events = [turnStart(0, 1), assistantMessage(1, [reasoning('   \n  ')])]
+    expect(render(events, { thinking: true })).toMatch(/<summary>思考（\d+ 字）<\/summary>/)
+  })
+
+  it('cuts a very long preview at a readable length', () => {
+    const long = '一'.repeat(120)
+    const events = [turnStart(0, 1), assistantMessage(1, [reasoning(long)])]
+    const html = render(events, { thinking: true })
+    const summary = /<summary>思考 · (.*?)<\/summary>/.exec(html)[1]
+    expect(summary).toBe(`${'一'.repeat(60)}…（120 字）`)
+  })
+
+  it('uses the call description as the tool title', () => {
+    const args = JSON.stringify({ description: '查看 core/compatibility.py 中的兼容性判定', code: 'x' })
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'run_code', args)]
+    const html = render(events, { tools: true })
+    expect(html).toContain('<code>run_code</code> · 查看 core/compatibility.py 中的兼容性判定')
+  })
+
+  it('leaves a call without a description alone', () => {
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'bash', JSON.stringify({ command: 'ls' }))]
+    const html = render(events, { tools: true })
+    expect(html).toContain('<summary><code>bash</code>')
+  })
+
+  it('escapes a description that contains markup', () => {
+    const args = JSON.stringify({ description: '<img src=x onerror=alert(1)>', code: 'x' })
+    const events = [turnStart(0, 1), toolCallEvent(1, 'c', 'run_code', args)]
+    const html = render(events, { tools: true })
+    expect(html).not.toContain('<img src=x')
+    expect(html).toContain('&lt;img src=x')
+  })
+})
+
 describe('reading width', () => {
   it('exposes a width control and a CSS variable for it', () => {
     const html = render([], {}, {})

@@ -28,7 +28,8 @@
 - **五种格式** —— Markdown、HTML（单文件、自包含样式、可打印成 PDF）、纯文本（无任何标记，终端/记事本都能读）、ZIP（md + html + txt + 图片素材 + `meta.json`）、**会话日志 JSONL**（可回灌的原始事件流）
 - **真导入** —— `/import-session <文件>` 把 JSONL 日志（或 Markdown 文字稿）变回一个真实会话：走宿主的 `sessions.create({ seed })` + `sessionPersistence` 落盘 + `workspace.attachSession`，导入后能直接接着聊，不是一份只读的"假聊天记录"
 - **内容齐全** —— 用户/助手消息、思考块（可折叠）、工具调用与结果（可折叠、超长自动截断并标注）、代码块（围栏长度自适应，正文里的 ``` 撑不破）、图片附件、时间戳、会话标题 / 模型 / 用量统计
-- **提问有独立卡片** —— `ask_user_question` 不再是一坨 JSON：导出成「提问 · 2/2 已回答」卡片，问题正文、每个选项、以及你实际选中的那条（高亮 + ✓ 已选）都在，默认展开
+- **提问有独立卡片** —— `ask_user_question` 不再是一坨 JSON：导出成「提问 · 2/2 已回答」卡片，问题正文、每个选项、以及你实际选中的那条（高亮 + ✓ 已选）都在，默认展开。**提问嵌在 `run_code` 程序里**也能认出来（解析代码里的对象字面量，答案按 `{id, selected}` 的形状在返回值里找）
+- **每行都有标题** —— 思考块用正文首行作预览（`思考 · 核对分支二的条件（32 字）`），工具行用调用的 `description`（`run_code · 查看 core/compatibility.py …`），跟聊天界面看到的一致
 - **阅读宽度可调** —— HTML 顶栏一个按钮在「标准 / 宽 / 超宽 / 全宽」之间循环切换，选择记在本机浏览器里
 - **记住上次的选项** —— 导出对话框记住格式、范围、内容开关和输出方式，下次打开直接沿用（目录、选中的文件和预览仍按会话重置）
 - **对话框可缩放** —— 弹窗四边四角都能拖，宽度和高度随意；尺寸记在本机，双击任一手柄还原默认
@@ -323,7 +324,8 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 - **Real import, not a mock** — `/import-session <file>` turns a JSONL log (or a Markdown transcript) back into an actual Session: the host validates it through `sessions.create({ seed })`, it is written through `sessionPersistence`, and `workspace.attachSession` puts it in the sidebar. You can keep talking in it afterwards.
 - **Complete content** — user and assistant messages, foldable reasoning blocks, foldable tool calls and results with truncation markers, code fences that cannot be broken by the body, image attachments, timestamps, and the Session title, models, and usage.
 - **One tool call is one line.** Arguments and result share a single collapsed disclosure, so what you read by default is who said what and when; open a call only when you need it.
-- **Questions get their own card.** `ask_user_question` no longer renders as raw JSON: it becomes a "提问 · 2/2 已回答" card with the question text, every option, and the one you actually picked (highlighted, marked `✓ 已选`). It opens by default — a question you answered is conversation, not tool plumbing.
+- **Questions get their own card.** `ask_user_question` no longer renders as raw JSON: it becomes a "提问 · 2/2 已回答" card with the question text, every option, and the one you actually picked (highlighted, marked `✓ 已选`). It opens by default — a question you answered is conversation, not tool plumbing. Questions asked **from inside a `run_code` program** are recognised too: the object literal is read out of the code, and the answers are found by shape (`{ id, selected }`) wherever the program returned them.
+- **Every row has a title.** A folded reasoning block previews its first line (`思考 · 核对分支二的条件（32 字）`), and a tool row shows the call's `description` (`run_code · 查看 core/compatibility.py …`) — the same labels the chat view shows.
 - **Adjustable reading width.** One button in the HTML top bar cycles 标准 / 宽 / 超宽 / 全宽; the choice is remembered per browser.
 - **The dialog remembers your choices** — format, scope, content switches, and output mode carry over to the next open. The directory, the chosen file, and the preview stay per-session.
 - **A resizable dialog** — drag any edge or corner; width and height are up to you. The size is remembered per browser, and double-clicking a handle restores the default.

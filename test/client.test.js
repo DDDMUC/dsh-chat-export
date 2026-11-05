@@ -666,7 +666,7 @@ describe('resizing the dialog', () => {
 
   /** Render the header action with the dialog open. */
   async function renderOpenDialog(entryOverrides = {}) {
-    const { exports } = await loadClient()
+    const { exports, styles } = await loadClient()
     const { ctx, registrations } = stubCtx()
     exports.apply(ctx)
     const { component } = registrations[0]
@@ -688,7 +688,7 @@ describe('resizing the dialog', () => {
     // has to be called once before its Modal element exists.
     const dialogNode = tree.children[1]
     const modal = dialogNode.type(dialogNode.props)
-    return { modal, exports }
+    return { modal, exports, styles }
   }
 
   it('hands the dialog a class it can size', async () => {
@@ -732,5 +732,29 @@ describe('resizing the dialog', () => {
     const { exports } = await renderOpenDialog()
     expect(exports.resizedBox(start, { dx: -5000, dy: -5000 }, 'se', limits)).toEqual({ width: 460, height: 320 })
     expect(exports.resizedBox(start, { dx: 5000, dy: 5000 }, 'se', limits)).toEqual({ width: 1400, height: 900 })
+  })
+
+  it('points each cursor along the diagonal that corner actually resizes', async () => {
+    const { exports } = await renderOpenDialog()
+    const cursors = exports.HANDLE_CURSORS
+    // nwse runs NW-SE: top-left and bottom-right.
+    expect(cursors.nw).toBe('nwse-resize')
+    expect(cursors.se).toBe('nwse-resize')
+    // nesw runs NE-SW: top-right and bottom-left.
+    expect(cursors.ne).toBe('nesw-resize')
+    expect(cursors.sw).toBe('nesw-resize')
+    // Edges follow their own axis.
+    expect(cursors.n).toBe('ns-resize')
+    expect(cursors.s).toBe('ns-resize')
+    expect(cursors.e).toBe('ew-resize')
+    expect(cursors.w).toBe('ew-resize')
+  })
+
+  it('emits one cursor rule per handle, taken from that table', async () => {
+    const { exports, styles } = await renderOpenDialog()
+    const css = styles[0].textContent
+    for (const [direction, cursor] of Object.entries(exports.HANDLE_CURSORS)) {
+      expect(css, `rule for ${direction}`).toContain(`.dshce-rz-${direction}{cursor:${cursor}}`)
+    }
   })
 })

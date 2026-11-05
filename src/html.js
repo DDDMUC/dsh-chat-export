@@ -164,6 +164,13 @@ h1{font-size:26px;line-height:1.35;margin:0 0 6px}
 h2{font-size:19px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 h3{font-size:15px;margin:22px 0 8px;color:var(--dim);font-weight:600}
 h3 .badge{font-weight:400}
+/* Content headings are demoted to h4-h6 so the document outline stays
+   turn/message. Without explicit sizes they fall back to the browser defaults
+   (h6 is 0.67em, about 10px here), which reads as a broken paragraph rather
+   than a heading. */
+h4{font-size:18px;line-height:1.45;margin:22px 0 8px;font-weight:600}
+h5{font-size:16.5px;line-height:1.5;margin:18px 0 6px;font-weight:600}
+h6{font-size:15px;line-height:1.55;margin:16px 0 6px;font-weight:600}
 .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
 table.meta{width:100%;border-collapse:collapse;font-size:13px;margin:0 0 26px;background:var(--soft);border-radius:10px;overflow:hidden}
 table.meta th,table.meta td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -205,16 +212,21 @@ details.think{border-left:3px solid var(--line);margin:10px 0;padding-left:12px}
 details.think>summary{cursor:pointer;color:var(--dim);font-size:13px;list-style:none}
 details.think>summary::-webkit-details-marker{display:none}
 details.think .inner{color:var(--dim);font-size:14px;white-space:pre-wrap;margin-top:8px}
-pre.code{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;margin:10px 0}
-code{font-family:var(--mono);font-size:.92em;background:var(--soft);padding:.12em .38em;border-radius:4px}
-pre.code code{background:none;padding:0;font-size:inherit}
+pre.code{background:var(--soft);border-radius:10px;padding:14px 16px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.6;margin:12px 0}
+/* Inline code reads as a chip, the way the chat view shows it, rather than a
+   faintly tinted word that disappears inside a sentence. */
+code{font-family:var(--mono);font-size:.9em;background:var(--soft);padding:.14em .42em;border-radius:5px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+pre.code code{background:none;padding:0;font-size:inherit;border-radius:0}
 blockquote{margin:10px 0;padding:2px 0 2px 14px;border-left:3px solid var(--line);color:var(--dim)}
 img{max-width:100%;border-radius:8px;border:1px solid var(--line);display:block;margin:10px 0}
 figure{margin:12px 0}figcaption{color:var(--dim);font-size:12px;margin-top:4px}
 a{color:var(--accent)}
-table:not(.meta){border-collapse:collapse;font-size:13.5px;margin:10px 0;width:100%}
-table:not(.meta) th,table:not(.meta) td{border:1px solid var(--line);padding:6px 10px;text-align:left}
-table:not(.meta) th{background:var(--soft)}
+/* DSH tables are ruled, not boxed: no outer border, no vertical lines, a rule
+   under the header and between rows. */
+table:not(.meta){border-collapse:collapse;font-size:13.5px;margin:14px 0;width:100%}
+table:not(.meta) th,table:not(.meta) td{border:none;border-bottom:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+table:not(.meta) th{font-weight:600;background:none;border-bottom-color:var(--fg);color:var(--fg)}
+table:not(.meta) tr:last-child td{border-bottom:none}
 .note{color:var(--dim);font-size:13px;margin:14px 0;padding-left:12px;border-left:2px solid var(--line)}
 .note.warn{color:var(--warn)}
 .bar{position:sticky;top:0;z-index:5;display:flex;gap:10px;align-items:center;padding:10px 24px;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
@@ -228,6 +240,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);color:v
 .wrap{max-width:none;padding:0}
 h2{break-before:page;break-after:avoid}
 h3{break-after:avoid}
+h4,h5,h6{break-after:avoid}
 .msg,.tool,pre.code,img,table{break-inside:avoid}
 .tool>summary::before,details.think>summary{content:""}
 details{display:block}
@@ -251,6 +264,30 @@ function imageHtml(ref, context) {
   }</figure>`
 }
 
+/**
+ * The first meaningful line of a block, cut to a readable length.
+ *
+ * Used as the one-line preview on a folded reasoning block and as a tool
+ * call's title, the two places the chat view shows a short label instead of
+ * the full body.
+ */
+function firstLine(text, limit = 60) {
+  const line = String(text ?? '')
+    .split('\n')
+    .map((row) => row.trim())
+    .find((row) => row !== '')
+  if (line === undefined) return ''
+  return line.length > limit ? `${line.slice(0, limit)}…` : line
+}
+
+/** The `description` a tool call carries, used as its one-line title. */
+function toolDescription(entry) {
+  if (entry.arguments === '') return ''
+  const args = parseJson(entry.arguments)
+  if (args === null || typeof args.description !== 'string') return ''
+  return firstLine(args.description)
+}
+
 /** Render a message's parts. */
 function partsHtml(parts, context, openThinking) {
   const out = []
@@ -258,8 +295,13 @@ function partsHtml(parts, context, openThinking) {
     if (part.type === 'text') out.push(`<div class="md">${renderMarkdownBody(part.text)}</div>`)
     else if (part.type === 'reasoning') {
       const length = Array.from(part.text).length
+      // The chat view labels a folded reasoning block with a one-line preview
+      // of what it was about; the log carries no title of its own, so the first
+      // meaningful line is the closest honest equivalent.
+      const preview = firstLine(part.text)
+      const label = preview === '' ? `思考（${length} 字）` : `思考 · ${escapeHtml(preview)}（${length} 字）`
       out.push(
-        `<details class="think"${openThinking ? ' open' : ''}><summary>思考（${length} 字）</summary><div class="inner">${escapeHtml(
+        `<details class="think"${openThinking ? ' open' : ''}><summary>${label}</summary><div class="inner">${escapeHtml(
           part.text,
         )}</div></details>`,
       )
@@ -301,38 +343,29 @@ function parseJson(text) {
 /** The tool that asks the human a question; it gets its own rendering. */
 const ASK_TOOL = 'ask_user_question'
 
-/**
- * Render an `ask_user_question` call as a readable question card.
- *
- * The log stores the call as `{ questions: [{ id, header, question, options:
- * [{ label, description }] }] }` and the answer as `{ answers: [{ id,
- * selected: [...] }] }`, so both halves can be shown instead of a wall of
- * JSON. A log that predates the structured shape falls back to the ordinary
- * tool card.
- *
- * @returns the card HTML, or null when the arguments are not a question set.
- */
-function askHtml(entry) {
-  const args = parseJson(entry.arguments)
-  const questions = args !== null && Array.isArray(args.questions) ? args.questions : null
-  if (questions === null || questions.length === 0) return null
-
-  const answered = entry.result === null ? null : parseJson(entry.result.text)
-  const answers = answered !== null && Array.isArray(answered.answers) ? answered.answers : []
-  const byId = new Map()
-  for (const answer of answers) {
-    if (answer === null || typeof answer !== 'object') continue
+/** Map answer records to `question id -> labels picked`. */
+function selectedMap(answers) {
+  const map = new Map()
+  answers.forEach((answer, index) => {
+    if (answer === null || typeof answer !== 'object') return
     const selected = Array.isArray(answer.selected) ? answer.selected.map(String) : []
-    byId.set(String(answer.id ?? ''), selected)
-  }
+    map.set(String(answer.id ?? index), selected)
+  })
+  return map
+}
 
+/**
+ * Render a question set as one card.
+ *
+ * @param questions - `[{ id, header, question, options: [{ label, description }] }]`.
+ * @param selectedById - `Map` of question id to the labels that were picked.
+ * @param options - `{ answered?, duration? }`.
+ */
+function askCard(questions, selectedById, options = {}) {
   let answeredCount = 0
-  const blocks = []
-  questions.forEach((question, index) => {
+  const blocks = questions.map((question, index) => {
     const item = question !== null && typeof question === 'object' ? question : {}
-    const id = String(item.id ?? index)
-    // Older logs omit `id` on the answers; fall back to position.
-    const selected = byId.get(id) ?? (answers[index] === undefined ? [] : byId.get(String(answers[index].id ?? '')) ?? [])
+    const selected = selectedById.get(String(item.id ?? index)) ?? []
     if (selected.length > 0) answeredCount += 1
 
     const header = String(item.header ?? '')
@@ -342,27 +375,274 @@ function askHtml(entry) {
         const opt = option !== null && typeof option === 'object' ? option : { label: String(option ?? '') }
         const label = String(opt.label ?? '')
         const chosen = selected.includes(label)
-        const desc = opt.description === undefined || opt.description === '' ? '' : `<div class="desc">${renderInline(String(opt.description))}</div>`
+        const desc =
+          opt.description === undefined || opt.description === ''
+            ? ''
+            : `<div class="desc">${renderInline(String(opt.description))}</div>`
         return `<li class="opt${chosen ? ' sel' : ''}"><div class="lbl">${renderInline(label)}</div>${desc}</li>`
       })
       .join('')
 
-    blocks.push(
-      `<div class="q">${header === '' ? '' : `<div class="qh">${escapeHtml(header)}</div>`}<div class="qt md">${renderMarkdownBody(
-        String(item.question ?? ''),
-      )}</div>${items === '' ? '' : `<ul class="opts">${items}</ul>`}${
-        selected.length === 0 ? '<p class="pending">（日志中没有记录选择）</p>' : ''
-      }</div>`,
-    )
+    return `<div class="q">${header === '' ? '' : `<div class="qh">${escapeHtml(header)}</div>`}<div class="qt md">${renderMarkdownBody(
+      String(item.question ?? ''),
+    )}</div>${items === '' ? '' : `<ul class="opts">${items}</ul>`}${
+      selected.length === 0 ? '<p class="pending">（日志中没有记录选择）</p>' : ''
+    }</div>`
   })
 
-  const duration = entry.durationMs === null ? '' : ` · ${formatDuration(entry.durationMs)}`
-  const status = answered === null ? '未记录回答' : `${answeredCount}/${questions.length} 已回答`
+  const status = options.answered === false ? '未记录回答' : `${answeredCount}/${questions.length} 已回答`
+  const duration = options.duration === undefined ? '' : ` · ${options.duration}`
   // Always open: a question the human was asked and answered is conversation,
   // not tool plumbing, so folding it away would hide the thing being asked for.
   return `<details class="ask" open><summary><b>提问</b> · ${escapeHtml(status)}${escapeHtml(
     duration,
   )}</summary><div class="body">${blocks.join('')}</div></details>`
+}
+
+/**
+ * Render a top-level `ask_user_question` call.
+ *
+ * The log stores the call as `{ questions: [...] }` and the answer as
+ * `{ answers: [{ id, selected }] }`, so both halves can be shown instead of a
+ * wall of JSON. A log that predates the structured shape falls back to the
+ * ordinary tool card.
+ *
+ * @returns the card HTML, or null when the arguments are not a question set.
+ */
+function askHtml(entry) {
+  const args = parseJson(entry.arguments)
+  const questions = args !== null && Array.isArray(args.questions) ? args.questions : null
+  if (questions === null || questions.length === 0) return null
+  const answered = entry.result === null ? null : parseJson(entry.result.text)
+  const answers = answered !== null && Array.isArray(answered.answers) ? answered.answers : []
+  return askCard(questions, selectedMap(answers), {
+    answered: answered !== null,
+    duration: entry.durationMs === null ? undefined : formatDuration(entry.durationMs),
+  })
+}
+
+/**
+ * Return the text between `openIndex` and its matching bracket.
+ *
+ * Quotes are tracked so a `)` inside a string does not end the scan early;
+ * template literals are treated as plain strings, which is enough for a
+ * question payload.
+ */
+function balanced(text, openIndex) {
+  let depth = 0
+  let quote = ''
+  for (let index = openIndex; index < text.length; index += 1) {
+    const char = text[index]
+    if (quote !== '') {
+      if (char === '\\') {
+        index += 1
+        continue
+      }
+      if (char === quote) quote = ''
+      continue
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char
+      continue
+    }
+    if (char === '(' || char === '[' || char === '{') depth += 1
+    else if (char === ')' || char === ']' || char === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(openIndex + 1, index)
+    }
+  }
+  return null
+}
+
+/**
+ * Read one JavaScript literal.
+ *
+ * The program is JavaScript, not JSON: keys are bare identifiers and strings
+ * may be template literals, so `JSON.parse` cannot be used. This reads the
+ * subset a question payload actually uses - objects, arrays, strings, numbers,
+ * booleans, null - and returns null for anything else rather than guessing.
+ */
+function readLiteral(source) {
+  let at = 0
+  const skip = () => {
+    while (at < source.length && /\s/u.test(source[at])) at += 1
+  }
+  const fail = () => {
+    throw new Error('unsupported literal')
+  }
+  const readString = () => {
+    const quote = source[at]
+    at += 1
+    let out = ''
+    while (at < source.length) {
+      const char = source[at]
+      if (char === '\\') {
+        const next = source[at + 1]
+        out += next === 'n' ? '\n' : next === 't' ? '\t' : next === 'r' ? '\r' : next
+        at += 2
+        continue
+      }
+      if (char === quote) {
+        at += 1
+        return out
+      }
+      out += char
+      at += 1
+    }
+    return fail()
+  }
+  const readKey = () => {
+    skip()
+    if (source[at] === '"' || source[at] === "'" || source[at] === '`') return readString()
+    const start = at
+    while (at < source.length && /[A-Za-z0-9_$]/u.test(source[at])) at += 1
+    if (start === at) fail()
+    return source.slice(start, at)
+  }
+  const readValue = () => {
+    skip()
+    const char = source[at]
+    if (char === '{') {
+      at += 1
+      const object = {}
+      skip()
+      if (source[at] === '}') {
+        at += 1
+        return object
+      }
+      while (at < source.length) {
+        const key = readKey()
+        skip()
+        if (source[at] !== ':') fail()
+        at += 1
+        object[key] = readValue()
+        skip()
+        if (source[at] === ',') {
+          at += 1
+          continue
+        }
+        if (source[at] === '}') {
+          at += 1
+          return object
+        }
+        fail()
+      }
+      return fail()
+    }
+    if (char === '[') {
+      at += 1
+      const array = []
+      skip()
+      if (source[at] === ']') {
+        at += 1
+        return array
+      }
+      while (at < source.length) {
+        array.push(readValue())
+        skip()
+        if (source[at] === ',') {
+          at += 1
+          continue
+        }
+        if (source[at] === ']') {
+          at += 1
+          return array
+        }
+        fail()
+      }
+      return fail()
+    }
+    if (char === '"' || char === "'" || char === '`') return readString()
+    const start = at
+    while (at < source.length && /[A-Za-z0-9_$.\-+]/u.test(source[at])) at += 1
+    const raw = source.slice(start, at)
+    if (raw === 'true') return true
+    if (raw === 'false') return false
+    if (raw === 'null' || raw === 'undefined') return null
+    const number = Number(raw)
+    if (raw !== '' && Number.isFinite(number)) return number
+    return fail()
+  }
+  try {
+    const value = readValue()
+    skip()
+    return at === source.length ? value : null
+  } catch {
+    return null
+  }
+}
+
+/** Every question asked by `ask_user_question(...)` inside one program. */
+function questionsInCode(code) {
+  const questions = []
+  let from = 0
+  while (from < code.length) {
+    const at = code.indexOf(ASK_TOOL, from)
+    if (at < 0) break
+    from = at + ASK_TOOL.length
+    const open = code.indexOf('(', from)
+    if (open < 0) break
+    const body = balanced(code, open)
+    if (body === null) continue
+    const parsed = readLiteral(body)
+    if (parsed === null || !Array.isArray(parsed.questions)) continue
+    for (const question of parsed.questions) {
+      if (question !== null && typeof question === 'object') questions.push(question)
+    }
+  }
+  return questions
+}
+
+/** Parse JSON that may be followed by trailing log lines. */
+function jsonPrefix(text) {
+  const raw = String(text ?? '')
+  const direct = parseJson(raw)
+  if (direct !== null) return direct
+  const start = raw.indexOf('{')
+  const end = raw.lastIndexOf('}')
+  if (start < 0 || end <= start) return null
+  return parseJson(raw.slice(start, end + 1))
+}
+
+/** Collect every `{ id, selected }` record anywhere in a returned value. */
+function collectAnswers(value, out, depth = 0) {
+  if (depth > 8 || value === null || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    for (const item of value) collectAnswers(item, out, depth + 1)
+    return
+  }
+  if (typeof value.id === 'string' && Array.isArray(value.selected)) {
+    out.push(value)
+    return
+  }
+  for (const key of Object.keys(value)) collectAnswers(value[key], out, depth + 1)
+}
+
+/**
+ * Render a question asked from inside a `run_code` program.
+ *
+ * Some presets expose only `run_code` at the top level, so `ask_user_question`
+ * is called from inside the program and never appears as its own tool call.
+ * The questions are then JavaScript object literals in the `code` argument, and
+ * the answers sit wherever the program chose to return them - the tool's own
+ * payload is `{ answers: [{ id, selected }] }`, so the shape is searched for
+ * rather than a key name.
+ *
+ * @returns a card, or null when this call carries no readable question.
+ */
+function nestedAskHtml(entry) {
+  const args = parseJson(entry.arguments)
+  const code = args !== null && typeof args.code === 'string' ? args.code : ''
+  if (!code.includes(ASK_TOOL)) return null
+  const questions = questionsInCode(code)
+  if (questions.length === 0) return null
+  const found = []
+  if (entry.result !== null) collectAnswers(jsonPrefix(entry.result.text), found)
+  const selectedById = selectedMap(found)
+  return askCard(questions, selectedById, {
+    answered: selectedById.size > 0,
+    duration: entry.durationMs === null ? undefined : formatDuration(entry.durationMs),
+  })
 }
 
 /** Render one tool entry. */
@@ -371,6 +651,10 @@ function toolHtml(entry, context, openTools) {
     const card = askHtml(entry)
     if (card !== null) return card
   }
+  // A question asked from inside a program is conversation too, so its card
+  // goes above the collapsed call that produced it.
+  const nested = nestedAskHtml(entry) ?? ''
+  const description = toolDescription(entry)
   const duration = entry.durationMs === null ? '' : ` · ${formatDuration(entry.durationMs)}`
   const failed = entry.result !== null && entry.result.isError
   const out = [`<details class="tool${failed ? ' err' : ''}"${openTools ? ' open' : ''}>`]
@@ -380,7 +664,7 @@ function toolHtml(entry, context, openTools) {
       : entry.result.truncated
         ? ` · 结果已截断（共 ${entry.result.totalChars.toLocaleString('en-US')} 字）`
         : ` · 结果 ${entry.result.totalLines.toLocaleString('en-US')} 行`
-  out.push(`<summary><code>${escapeHtml(entry.name)}</code>${failed ? ' · 出错' : ''}${escapeHtml(duration)}${escapeHtml(tail)}</summary><div class="body">`)
+  out.push(`<summary><code>${escapeHtml(entry.name)}</code>${description === '' ? '' : ` · ${escapeHtml(description)}`}${failed ? ' · 出错' : ''}${escapeHtml(duration)}${escapeHtml(tail)}</summary><div class="body">`)
   if (entry.arguments !== '') {
     out.push(`<div class="md">${renderMarkdownBody('```json\n' + prettyJson(entry.arguments) + '\n```')}</div>`)
   }
@@ -389,7 +673,7 @@ function toolHtml(entry, context, openTools) {
     for (const ref of entry.result.images ?? []) out.push(imageHtml(ref, context))
   }
   out.push('</div></details>')
-  return out.join('')
+  return nested + out.join('')
 }
 
 /** Imported lazily to keep this module's public surface about HTML. */
