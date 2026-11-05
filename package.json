@@ -1,6 +1,6 @@
 {
   "name": "dsh-chat-export",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Readable transcript export AND replayable import for DeepSeek Harness: turn any Session into a Markdown / HTML / ZIP transcript or a JSONL event log, and turn that log back into a real, continuable Session — from the Session header, /export-md, or /import-session.",
   "type": "module",
   "main": "src/index.js",
