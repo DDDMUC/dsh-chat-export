@@ -31,6 +31,7 @@
 - **提问有独立卡片** —— `ask_user_question` 不再是一坨 JSON：导出成「提问 · 2/2 已回答」卡片，问题正文、每个选项、以及你实际选中的那条（高亮 + ✓ 已选）都在，默认展开
 - **阅读宽度可调** —— HTML 顶栏一个按钮在「标准 / 宽 / 超宽 / 全宽」之间循环切换，选择记在本机浏览器里
 - **记住上次的选项** —— 导出对话框记住格式、范围、内容开关和输出方式，下次打开直接沿用（目录、选中的文件和预览仍按会话重置）
+- **对话框可缩放** —— 弹窗四边四角都能拖，宽度和高度随意；尺寸记在本机，双击任一手柄还原默认
 - **导出前可预览** —— 对话框里点「预览开头」直接看 Markdown 开头
 - **两种落盘方式** —— 浏览器下载，或写进指定目录（走官方 `ctx.fs`，受会话沙箱约束）
 - **范围可选** —— 「完整日志」按发生顺序导出全部内容（含后来被压缩或删除的历史）；「仅当前上下文」只导出模型现在还能看到的部分
@@ -325,6 +326,7 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 - **Questions get their own card.** `ask_user_question` no longer renders as raw JSON: it becomes a "提问 · 2/2 已回答" card with the question text, every option, and the one you actually picked (highlighted, marked `✓ 已选`). It opens by default — a question you answered is conversation, not tool plumbing.
 - **Adjustable reading width.** One button in the HTML top bar cycles 标准 / 宽 / 超宽 / 全宽; the choice is remembered per browser.
 - **The dialog remembers your choices** — format, scope, content switches, and output mode carry over to the next open. The directory, the chosen file, and the preview stay per-session.
+- **A resizable dialog** — drag any edge or corner; width and height are up to you. The size is remembered per browser, and double-clicking a handle restores the default.
 - **Preview before exporting**, and **two outputs**: a browser download, or a write into a directory through the host filesystem.
 - **Scope choice** — the full log in order, or only what the model can still see.
 - **Attachment de-duplication**, bilingual UI (zh/en), and **zero runtime dependencies**: no `@deepseek-ai/*` imports, a hand-written ZIP writer, and PDF via the browser's own print dialog.

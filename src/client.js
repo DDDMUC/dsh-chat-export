@@ -233,6 +233,26 @@ window.__ModuleLoader__.load({
       '.dshce-file-input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}',
       '.dshce-field-label{display:block;margin:14px 0 0;font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary,inherit)}',
       '.dshce-warnings{margin:8px 0 0;padding-left:18px;font-size:12px;line-height:20px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      // The dialog is a dense form (two-column switches plus a preview), and the
+      // primitive's default box is narrow. `Modal` forwards `className` to the
+      // dialog element, so this is ours to size. Eight handles make it behave
+      // like a window instead of a fixed sheet.
+      '.dshce-modal{position:relative;width:min(760px,94vw);max-width:94vw;max-height:88vh}',
+      '.dshce-rz-layer{display:contents}',
+      // Handles sit just inside the edge: the dialog clips its own overflow, so
+      // anything positioned outside the box would be cut off.
+      '.dshce-rz{position:absolute;z-index:5;touch-action:none}',
+      '.dshce-rz-n{top:0;left:18px;right:18px;height:7px;cursor:ns-resize}',
+      '.dshce-rz-s{bottom:0;left:18px;right:18px;height:7px;cursor:ns-resize}',
+      '.dshce-rz-e{right:0;top:18px;bottom:18px;width:7px;cursor:ew-resize}',
+      '.dshce-rz-w{left:0;top:18px;bottom:18px;width:7px;cursor:ew-resize}',
+      '.dshce-rz-ne{top:0;right:0;width:14px;height:14px;cursor:nesw-resize}',
+      '.dshce-rz-nw{top:0;left:0;width:14px;height:14px;cursor:nwse-resize}',
+      '.dshce-rz-se{bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize}',
+      '.dshce-rz-sw{bottom:0;left:0;width:14px;height:14px;cursor:nwse-resize}',
+      // One visible grip so the dialog does not look inert; the rest are hit areas.
+      '.dshce-rz-se::after{content:"";position:absolute;right:2px;bottom:2px;width:6px;height:6px;border-right:2px solid var(--dsw-alias-label-tertiary,#b9bcc2);border-bottom:2px solid var(--dsw-alias-label-tertiary,#b9bcc2);border-radius:1px;opacity:.6;pointer-events:none}',
+      '.dshce-rz-se:hover::after{opacity:1}',
     ].join('')
 
     const TAG_ID = 'dsh-chat-export/client.css'
@@ -1070,6 +1090,164 @@ window.__ModuleLoader__.load({
       })
     }
 
+    // --- dialog sizing --------------------------------------------------------
+
+    /** Where the dialog remembers the box the user dragged it to. */
+    const SIZE_KEY = 'dsh-chat-export.dialog.v1'
+    const MIN_DIALOG_W = 460
+    const MIN_DIALOG_H = 320
+    /** The eight drag directions, clockwise from the top edge. */
+    const DIRECTIONS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
+
+    /** Keep a number inside a range. */
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value))
+    }
+
+    /** The remembered dialog box, or null when there is none. */
+    function loadDialogSize() {
+      if (typeof window === 'undefined' || window.localStorage === undefined) return null
+      try {
+        const raw = window.localStorage.getItem(SIZE_KEY)
+        if (raw === null) return null
+        const saved = JSON.parse(raw)
+        if (saved === null || typeof saved !== 'object') return null
+        const width = Number(saved.width)
+        const height = Number(saved.height)
+        if (!Number.isFinite(width) || !Number.isFinite(height)) return null
+        return { width, height }
+      } catch {
+        return null
+      }
+    }
+
+    /** Remember a box, or forget it when `size` is null. */
+    function storeDialogSize(size) {
+      if (typeof window === 'undefined' || window.localStorage === undefined) return
+      try {
+        if (size === null) window.localStorage.removeItem(SIZE_KEY)
+        else window.localStorage.setItem(SIZE_KEY, JSON.stringify(size))
+      } catch {
+        // Storage is a convenience here, never a requirement.
+      }
+    }
+
+    /** The viewport-bounded limits one drag has to respect. */
+    function dialogLimits() {
+      const width = typeof window === 'undefined' ? 1280 : window.innerWidth
+      const height = typeof window === 'undefined' ? 800 : window.innerHeight
+      return {
+        minWidth: MIN_DIALOG_W,
+        minHeight: MIN_DIALOG_H,
+        maxWidth: Math.max(MIN_DIALOG_W, Math.round(width * 0.96)),
+        maxHeight: Math.max(MIN_DIALOG_H, Math.round(height * 0.92)),
+      }
+    }
+
+    /**
+     * The box a drag produces, given where it started and how far it moved.
+     *
+     * The dialog is centred by the primitive, so the box grows and shrinks
+     * around its middle: dragging the west edge left widens it rather than
+     * sliding it sideways. That is predictable, and it never fights the layout
+     * that keeps the dialog centred.
+     */
+    function resizedBox(start, delta, direction, limits) {
+      let width = start.width
+      let height = start.height
+      if (direction.indexOf('e') !== -1) width = start.width + delta.dx
+      else if (direction.indexOf('w') !== -1) width = start.width - delta.dx
+      if (direction.indexOf('s') !== -1) height = start.height + delta.dy
+      else if (direction.indexOf('n') !== -1) height = start.height - delta.dy
+      return {
+        width: clamp(width, limits.minWidth, limits.maxWidth),
+        height: clamp(height, limits.minHeight, limits.maxHeight),
+      }
+    }
+
+    /** Apply one box to the dialog element, pinning it so flex cannot undo it. */
+    function applyBox(dialog, box) {
+      dialog.style.width = `${box.width}px`
+      dialog.style.height = `${box.height}px`
+      // A pinned height has to scroll, or the footer is pushed out of the box.
+      dialog.style.overflowY = 'auto'
+    }
+
+    /** Resize the dialog by dragging one edge or corner. */
+    function beginResize(event, direction) {
+      const handle = event.currentTarget
+      const dialog = handle.closest === undefined ? null : handle.closest('.dshce-modal')
+      if (dialog === null) return
+      event.preventDefault()
+      const box = dialog.getBoundingClientRect()
+      const start = { width: box.width, height: box.height }
+      const origin = { x: event.clientX, y: event.clientY }
+      const limits = dialogLimits()
+      applyBox(dialog, start)
+      const move = (moveEvent) => {
+        applyBox(
+          dialog,
+          resizedBox(start, { dx: moveEvent.clientX - origin.x, dy: moveEvent.clientY - origin.y }, direction, limits),
+        )
+      }
+      const finish = () => {
+        handle.removeEventListener('pointermove', move)
+        handle.removeEventListener('pointerup', finish)
+        handle.removeEventListener('pointercancel', finish)
+        const done = dialog.getBoundingClientRect()
+        storeDialogSize({ width: Math.round(done.width), height: Math.round(done.height) })
+      }
+      try {
+        handle.setPointerCapture(event.pointerId)
+      } catch {
+        // A pointer that already ended cannot be captured; the drag still works
+        // while it is over the handle.
+      }
+      handle.addEventListener('pointermove', move)
+      handle.addEventListener('pointerup', finish)
+      handle.addEventListener('pointercancel', finish)
+    }
+
+    /** Forget the dragged size and go back to the stylesheet's box. */
+    function resetDialogSize(event) {
+      const dialog = event.currentTarget.closest === undefined ? null : event.currentTarget.closest('.dshce-modal')
+      if (dialog === null) return
+      dialog.style.width = ''
+      dialog.style.height = ''
+      dialog.style.overflowY = ''
+      storeDialogSize(null)
+    }
+
+    /** Re-apply the remembered box once the dialog exists in the DOM. */
+    function applySavedSize(node) {
+      if (node === null || node.closest === undefined) return
+      const dialog = node.closest('.dshce-modal')
+      if (dialog === null) return
+      const saved = loadDialogSize()
+      if (saved === null) return
+      const limits = dialogLimits()
+      applyBox(dialog, {
+        width: clamp(saved.width, limits.minWidth, limits.maxWidth),
+        height: clamp(saved.height, limits.minHeight, limits.maxHeight),
+      })
+    }
+
+    /** The eight drag handles. Double-click any of them to reset the box. */
+    function ResizeHandles() {
+      return jsx('div', {
+        className: 'dshce-rz-layer',
+        ref: applySavedSize,
+        children: DIRECTIONS.map((direction) =>
+          jsx('div', {
+            key: direction,
+            className: `dshce-rz dshce-rz-${direction}`,
+            onPointerDown: (event) => beginResize(event, direction),
+            onDoubleClick: resetDialogSize,
+          }),
+        ),
+      })
+    }
+
     /** The one dialog behind the header button: export and import tabs. */
     function ExportDialog({ sessionId, entry, controller, t }) {
       if (!entry.open) return null
@@ -1077,6 +1255,7 @@ window.__ModuleLoader__.load({
       const isImport = tab === 'import'
       return jsx(primitives.Modal, {
         open: true,
+        className: 'dshce-modal',
         title: t(isImport ? 'import.dialog.title' : 'dialog.title'),
         description: t(isImport ? 'import.dialog.description' : 'dialog.description'),
         closeLabel: t('action.cancel'),
@@ -1090,6 +1269,7 @@ window.__ModuleLoader__.load({
             isImport
               ? jsx(ImportBody, { sessionId, entry, controller, t })
               : jsx(ExportBody, { sessionId, entry, controller, t }),
+            jsx(ResizeHandles, {}),
           ],
         }),
       })
@@ -1185,6 +1365,9 @@ window.__ModuleLoader__.load({
     exports.ChatExportController = ChatExportController
     exports.defaultForm = defaultForm
     exports.filenameOf = filenameOf
+    // Exposed for the resize test: the drag maths is the only part of the
+    // dialog that can be checked without a DOM.
+    exports.resizedBox = resizedBox
     return module.exports
   },
 })

@@ -659,3 +659,78 @@ describe('remembering the dialog options', () => {
     expect(() => controller.setField('s1', 'format', 'txt')).not.toThrow()
   })
 })
+
+describe('resizing the dialog', () => {
+  const limits = { minWidth: 460, minHeight: 320, maxWidth: 1400, maxHeight: 900 }
+  const start = { width: 760, height: 600 }
+
+  /** Render the header action with the dialog open. */
+  async function renderOpenDialog(entryOverrides = {}) {
+    const { exports } = await loadClient()
+    const { ctx, registrations } = stubCtx()
+    exports.apply(ctx)
+    const { component } = registrations[0]
+    const entry = { open: true, tab: 'export', form: exports.defaultForm(), ...entryOverrides }
+    const tree = component({
+      sessionId: 'session-1',
+      useChatExport: (select) => select({ bySession: { 'session-1': entry } }),
+      controller: {
+        open: () => {},
+        close: () => {},
+        clearNotice: () => {},
+        setTab: () => {},
+        setField: () => {},
+        patch: () => {},
+      },
+      t: (key) => key,
+    })
+    // children: [button, dialog, toast|null]; the dialog is a component, so it
+    // has to be called once before its Modal element exists.
+    const dialogNode = tree.children[1]
+    const modal = dialogNode.type(dialogNode.props)
+    return { modal, exports }
+  }
+
+  it('hands the dialog a class it can size', async () => {
+    const { modal } = await renderOpenDialog()
+    expect(modal.type).toBe('Modal')
+    expect(modal.props.className).toBe('dshce-modal')
+  })
+
+  it('renders eight drag handles inside the dialog', async () => {
+    const { modal } = await renderOpenDialog()
+    // modal.children is the Fragment wrapping [tabs, body, handles]; the tabs
+    // and the body are components too, so take the last child by position.
+    const children = modal.children.children
+    const handles = children[children.length - 1]
+    const rendered = handles.type(handles.props)
+    expect(rendered.props.className).toBe('dshce-rz-layer')
+    expect(rendered.children).toHaveLength(8)
+    const classes = rendered.children.map((child) => child.props.className)
+    for (const direction of ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']) {
+      expect(classes).toContain(`dshce-rz dshce-rz-${direction}`)
+    }
+  })
+
+  it('grows east and south by the drag distance', async () => {
+    const box = (await renderOpenDialog()).exports.resizedBox(start, { dx: 120, dy: 60 }, 'se', limits)
+    expect(box).toEqual({ width: 880, height: 660 })
+  })
+
+  it('grows west and north by the opposite sign', async () => {
+    const { exports } = await renderOpenDialog()
+    expect(exports.resizedBox(start, { dx: -120, dy: -60 }, 'nw', limits)).toEqual({ width: 880, height: 660 })
+  })
+
+  it('moves only the axis the handle names', async () => {
+    const { exports } = await renderOpenDialog()
+    expect(exports.resizedBox(start, { dx: 100, dy: 100 }, 'e', limits)).toEqual({ width: 860, height: 600 })
+    expect(exports.resizedBox(start, { dx: 100, dy: 100 }, 's', limits)).toEqual({ width: 760, height: 700 })
+  })
+
+  it('clamps to the minimum and to the viewport', async () => {
+    const { exports } = await renderOpenDialog()
+    expect(exports.resizedBox(start, { dx: -5000, dy: -5000 }, 'se', limits)).toEqual({ width: 460, height: 320 })
+    expect(exports.resizedBox(start, { dx: 5000, dy: 5000 }, 'se', limits)).toEqual({ width: 1400, height: 900 })
+  })
+})
