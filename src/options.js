@@ -57,6 +57,9 @@ export function defaultOptions() {
     scope: 'full',
     images: 'auto',
     toolResultLimit: DEFAULT_TOOL_RESULT_LIMIT,
+    // Subagent conversations are part of what happened, so they are included
+    // unless asked otherwise. `--no-subagents` keeps the export to one session.
+    subagents: true,
     // Only meaningful for a ZIP bundle: put the replayable sidecar next to the
     // readable artifacts so one shared archive is both readable and importable.
     withLog: false,
@@ -74,6 +77,7 @@ const BOOLEAN_FLAGS = {
   timestamps: 'timestamps',
   usage: 'usage',
   'with-log': 'withLog',
+  subagents: 'subagents',
 }
 
 /** Value flags accepted on the command line. */

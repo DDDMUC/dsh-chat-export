@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { buildLogArtifact, parseLogArtifact } from '../src/log.js'
-import { runImport } from '../src/index.js'
+import { listWorkspaces, runCompose, runImport, runImportZip } from '../src/index.js'
+import { buildZip } from '../src/zip.js'
 import {
   DROPPED_TYPES,
   ImportError,
   createImportedSession,
+  eventsFromDialogue,
   eventsFromMarkdown,
   newSessionId,
   planImport,
@@ -162,6 +164,91 @@ describe('eventsFromMarkdown', () => {
 
   it('refuses a document with no recognizable messages', () => {
     expect(() => eventsFromMarkdown('# 只有标题\n\n没有消息。', { now: 1000 })).toThrow(ImportError)
+  })
+})
+
+describe('eventsFromMarkdown on a pasted user:/model: transcript', () => {
+  /** The messages a built transcript carries, in order. */
+  function bodies(built) {
+    return built.events
+      .filter((event) => event.type === 'user/message' || event.type === 'assistant/message')
+      .map((event) =>
+        event.type === 'user/message' ? event.data.content[0].text : event.data.message.content[0].text,
+      )
+  }
+
+  it('reads labels on their own line', () => {
+    const built = eventsFromMarkdown('user:\n你好\n\nmodel:\n你好，有什么可以帮你？\n\nuser:\n讲个笑话\n\nmodel:\n好的。', { now: 1000 })
+    expect(built.turns).toBe(2)
+    expect(built.messages).toBe(4)
+    expect(bodies(built)).toEqual(['你好', '你好，有什么可以帮你？', '讲个笑话', '好的。'])
+  })
+
+  it('reads the inline `label: text` form', () => {
+    const built = eventsFromMarkdown('user: 你好\nmodel: 在的', { now: 1000 })
+    expect(bodies(built)).toEqual(['你好', '在的'])
+  })
+
+  it('accepts a full-width colon and bold labels', () => {
+    const built = eventsFromMarkdown('**User：**你好\n**Assistant：**在的', { now: 1000 })
+    expect(bodies(built)).toEqual(['你好', '在的'])
+  })
+
+  it('accepts the Chinese labels', () => {
+    const built = eventsFromMarkdown('用户：你好\n模型：在的', { now: 1000 })
+    expect(bodies(built)).toEqual(['你好', '在的'])
+  })
+
+  it('keeps a speaker label inside a code fence as body text', () => {
+    const built = eventsFromMarkdown('user:\n这个文件里写了什么？\n\nmodel:\n```\nuser: root\nmodel: x\n```\n\n就这样。', { now: 1000 })
+    expect(built.messages).toBe(2)
+    expect(bodies(built)[1]).toContain('user: root')
+    expect(bodies(built)[1]).toContain('就这样。')
+  })
+
+  it('still prefers the strict format when the file is one of ours', () => {
+    const built = eventsFromMarkdown(markdown, { now: 1000 })
+    expect(built.turns).toBe(2)
+    expect(built.title).toBe('一次对话')
+  })
+
+  it('attaches a 思维 block to the next assistant message', () => {
+    const built = eventsFromMarkdown('用户：你是谁\n思维：用户问身份，我用依芙的人设回答。\n助手：我是依芙。', { now: 1000 })
+    const assistant = built.events.find((event) => event.type === 'assistant/message')
+    expect(assistant.data.message.content).toEqual([
+      { type: 'reasoning', text: '用户问身份，我用依芙的人设回答。' },
+      { type: 'text', text: '我是依芙。' },
+    ])
+  })
+
+  it('joins several 思维 lines into one reasoning block', () => {
+    const built = eventsFromMarkdown('用户：问\n思维：第一步。\n思维：第二步。\n助手：答', { now: 1000 })
+    const assistant = built.events.find((event) => event.type === 'assistant/message')
+    expect(assistant.data.message.content[0]).toEqual({ type: 'reasoning', text: '第一步。\n第二步。' })
+  })
+
+  it('keeps continuation lines under the reasoning block', () => {
+    const built = eventsFromMarkdown('用户：问\n思维：\n第一步。\n第二步。\n助手：答', { now: 1000 })
+    const assistant = built.events.find((event) => event.type === 'assistant/message')
+    expect(assistant.data.message.content[0].text).toBe('第一步。\n第二步。')
+  })
+
+  it('accepts the English thinking label', () => {
+    const built = eventsFromMarkdown('user: q\nthinking: weighing options\nassistant: a', { now: 1000 })
+    const assistant = built.events.find((event) => event.type === 'assistant/message')
+    expect(assistant.data.message.content[0]).toEqual({ type: 'reasoning', text: 'weighing options' })
+  })
+
+  it('drops a reasoning block that no assistant message follows', () => {
+    const built = eventsFromMarkdown('用户：问\n思维：悬空的想法。', { now: 1000 })
+    expect(built.messages).toBe(1)
+    expect(built.events.some((event) => event.type === 'assistant/message')).toBe(false)
+  })
+
+  it('leaves a message without reasoning as plain text', () => {
+    const built = eventsFromMarkdown('用户：问\n助手：答', { now: 1000 })
+    const assistant = built.events.find((event) => event.type === 'assistant/message')
+    expect(assistant.data.message.content).toEqual([{ type: 'text', text: '答' }])
   })
 })
 
@@ -335,5 +422,241 @@ describe('runImport', () => {
 
   it('refuses an empty payload', async () => {
     await expect(runImport({ get: () => undefined }, { text: '  ' })).rejects.toThrow(ImportError)
+  })
+})
+
+describe('the protected system head', () => {
+  /** The first event that occupies a surface node. */
+  const firstSurface = (events) => events.find((event) => event.surfaceOp !== undefined)
+
+  it('opens a Markdown import with an empty system message', () => {
+    const built = eventsFromMarkdown('用户：问\n助手：答', { now: 1000 })
+    const head = firstSurface(built.events)
+    expect(head.type).toBe('system/message')
+    expect(head.surfaceOp).toBe('append')
+    expect(head.data.message).toMatchObject({ role: 'system', content: [], source: { kind: 'system-prompt' } })
+  })
+
+  it('opens a composed dialogue the same way', () => {
+    const built = eventsFromDialogue([{ role: 'user', text: '问' }, { role: 'assistant', text: '答' }], { now: 1000 })
+    const head = firstSurface(built.events)
+    expect(head.type).toBe('system/message')
+    expect(head.data.message.content).toEqual([])
+  })
+
+  it('does not put a user message on surface node 0', () => {
+    // The store refuses to load a log whose first surface event is a user
+    // message: "system/message requires a protected first surface head".
+    const built = eventsFromMarkdown('用户：问\n助手：答', { now: 1000 })
+    expect(built.events.find((event) => event.surfaceOp !== undefined).type).not.toBe('user/message')
+  })
+
+  it('emits exactly one head, on the first turn', () => {
+    const built = eventsFromMarkdown('用户：一\n助手：二\n用户：三\n助手：四', { now: 1000 })
+    expect(built.events.filter((event) => event.type === 'system/message')).toHaveLength(1)
+  })
+})
+
+describe('eventsFromDialogue', () => {
+  it('emits the same chain an import does', () => {
+    const built = eventsFromDialogue(
+      [
+        { role: 'user', text: '你好' },
+        { role: 'assistant', text: '在的', reasoning: '先打个招呼' },
+      ],
+      { now: 1000, title: '手写对话' },
+    )
+    expect(built.turns).toBe(1)
+    expect(built.messages).toBe(2)
+    expect(built.title).toBe('手写对话')
+    const assistant = built.events.find((event) => event.type === 'assistant/message')
+    expect(assistant.data.message.content).toEqual([
+      { type: 'reasoning', text: '先打个招呼' },
+      { type: 'text', text: '在的' },
+    ])
+  })
+
+  it('refuses a draft with nothing in it', () => {
+    expect(() => eventsFromDialogue([], { now: 1000 })).toThrow(ImportError)
+  })
+
+  it('opens one turn per user message', () => {
+    const built = eventsFromDialogue(
+      [
+        { role: 'user', text: 'a' },
+        { role: 'assistant', text: 'b' },
+        { role: 'user', text: 'c' },
+        { role: 'assistant', text: 'd' },
+      ],
+      { now: 1000 },
+    )
+    expect(built.turns).toBe(2)
+  })
+
+  it('never attaches reasoning to a user message', () => {
+    const built = eventsFromDialogue([{ role: 'user', text: 'x', reasoning: '我不该有思维链' }], { now: 1000 })
+    const user = built.events.find((event) => event.type === 'user/message')
+    expect(user.data.content).toEqual([{ type: 'text', text: 'x' }])
+  })
+
+  it('calls an unnamed dialogue 新建的会话 rather than 导入的会话', () => {
+    const built = eventsFromDialogue([{ role: 'user', text: 'x' }], { now: 1000 })
+    expect(built.title).toBe('新建的会话')
+  })
+})
+
+describe('runCompose', () => {
+  it('creates a real session and attaches it', async () => {
+    const ctx = fakeCtx()
+    const result = await runCompose(ctx, {
+      messages: [
+        { role: 'user', text: '你好' },
+        { role: 'assistant', text: '在的' },
+      ],
+      title: '手写对话',
+      cwd: '/tmp/notes',
+    })
+    expect(result.ok).toBe(true)
+    expect(result.kind).toBe('compose')
+    expect(result.title).toBe('手写对话')
+    expect(result.messages).toBe(2)
+    expect(ctx.calls.some(([name]) => name === 'attach')).toBe(true)
+  })
+
+  it('refuses an empty draft', async () => {
+    await expect(runCompose(fakeCtx(), { messages: [] })).rejects.toThrow(ImportError)
+  })
+
+  it('skips a message whose body is blank', async () => {
+    const result = await runCompose(fakeCtx(), {
+      messages: [
+        { role: 'user', text: 'x' },
+        { role: 'assistant', text: '   ', reasoning: '只有思维' },
+      ],
+    })
+    expect(result.messages).toBe(1)
+  })
+
+  it('strips reasoning a client sends on a user message', async () => {
+    const base = fakeCtx()
+    let seed = []
+    const ctx = {
+      get(name) {
+        const service = base.get(name)
+        if (name !== 'sessions') return service
+        return {
+          create: (id, options) => {
+            seed = options.seed
+            return service.create(id, options)
+          },
+        }
+      },
+    }
+    await runCompose(ctx, { messages: [{ role: 'user', text: 'x', reasoning: '不该有' }] })
+    const user = seed.find((event) => event.type === 'user/message')
+    expect(user.data.content).toEqual([{ type: 'text', text: 'x' }])
+  })
+
+  it('defaults the title when none is given', async () => {
+    const result = await runCompose(fakeCtx(), { messages: [{ role: 'user', text: 'x' }] })
+    expect(result.title).toBe('新建的会话')
+  })
+})
+
+describe('listWorkspaces', () => {
+  it('returns the workspaces the registry knows, by title, dropping entries without a path', () => {
+    const ctx = {
+      get: () => ({
+        list: () => [
+          { id: 'w1', path: '/tmp/a', title: 'Default Project' },
+          { id: 'w2', path: '/tmp/b' },
+          { id: 'w3', title: '没有路径' },
+        ],
+      }),
+    }
+    expect(listWorkspaces(ctx)).toEqual({
+      ok: true,
+      workspaces: [
+        { id: 'w1', path: '/tmp/a', title: 'Default Project' },
+        // A record with no title falls back to its directory.
+        { id: 'w2', path: '/tmp/b', title: '/tmp/b' },
+      ],
+    })
+  })
+
+  it('returns an empty list when the host has no registry', () => {
+    expect(listWorkspaces({ get: () => undefined })).toEqual({ ok: true, workspaces: [] })
+  })
+})
+
+describe('a DeepSeek chat export', () => {
+  /** One conversation file for the archive. */
+  const conversation = (id, title) => ({
+    id,
+    title,
+    current_message_id: 2,
+    inserted_at: '2026-01-01T00:00:00Z',
+    messages: [
+      { id: 1, parent_id: null, role: 'USER', status: 'FINISHED', inserted_at: '2026-01-01T00:00:00Z', fragments: [{ type: 'REQUEST', content: `问 ${title}` }] },
+      { id: 2, parent_id: 1, role: 'ASSISTANT', status: 'FINISHED', inserted_at: '2026-01-01T00:00:01Z', fragments: [{ type: 'RESPONSE', content: `答 ${title}` }] },
+    ],
+  })
+
+  const archive = () =>
+    buildZip([
+      { path: 'manifest.json', data: Buffer.from('{"export_format_version":3}') },
+      {
+        path: 'chat_session_index.json',
+        data: Buffer.from(
+          JSON.stringify([
+            { id: 'old', updated_at: '2026-01-01T00:00:00Z' },
+            { id: 'new', updated_at: '2026-03-01T00:00:00Z' },
+          ]),
+        ),
+      },
+      { path: 'chat_sessions/old.json', data: Buffer.from(JSON.stringify(conversation('old', '旧会话'))) },
+      { path: 'chat_sessions/new.json', data: Buffer.from(JSON.stringify(conversation('new', '新会话'))) },
+    ])
+
+  it('is routed away from the session-log reader', async () => {
+    const result = await runImportZip(fakeCtx(), { zip: archive(), dryRun: true })
+    expect(result.kind).toBe('deepseek')
+  })
+
+  it('imports the most recently updated conversation', async () => {
+    const result = await runImportZip(fakeCtx(), { zip: archive(), dryRun: true })
+    expect(result.title).toBe('新会话')
+    expect(result.sourceId).toBe('new')
+    expect(result.messages ?? result.eventCount).toBeGreaterThan(0)
+  })
+
+  it('says how many other conversations the archive holds', async () => {
+    const result = await runImportZip(fakeCtx(), { zip: archive(), dryRun: true })
+    expect(result.available).toBe(2)
+    expect(result.warnings.join('')).toContain('2 个会话')
+  })
+
+  it('takes an explicitly named conversation', async () => {
+    const result = await runImportZip(fakeCtx(), { zip: archive(), dryRun: true, sessionId: 'old' })
+    expect(result.title).toBe('旧会话')
+  })
+
+  it('imports a batch when a limit is given', async () => {
+    const result = await runImportZip(fakeCtx(), { zip: archive(), dryRun: true, limit: 2 })
+    expect(result.imported.map((entry) => entry.title)).toEqual(['新会话', '旧会话'])
+  })
+
+  it('reports a conversation that is not in the archive', async () => {
+    await expect(runImportZip(fakeCtx(), { zip: archive(), dryRun: true, sessionId: 'nope' })).rejects.toThrow(/没有会话/u)
+  })
+
+  it('writes a real session when it is not a dry run', async () => {
+    const ctx = fakeCtx()
+    // The fake registry only has the workspace `create` makes, so the import
+    // has to be told where to put the session.
+    const result = await runImportZip(ctx, { zip: archive(), cwd: '/tmp/notes' })
+    expect(result.ok).toBe(true)
+    expect(ctx.calls.some(([name]) => name === 'sessions.create')).toBe(true)
+    expect(ctx.calls.some(([name]) => name === 'attach')).toBe(true)
   })
 })

@@ -15,6 +15,7 @@
 // are unit-testable without a host.
 
 import { randomUUID } from 'node:crypto'
+import { dialogueTurns, readChatbox } from './chatbox.js'
 import { SESSION_FORMAT_VERSION } from './log.js'
 
 /**
@@ -221,6 +222,95 @@ function speakerOf(label) {
 }
 
 /**
+ * Speaker labels people write when they paste a transcript out of some other
+ * chat tool. Both the full-width colon and `**bold**` wrappers show up in the
+ * wild, so both are accepted.
+ */
+const LOOSE_USER = /^\s*(?:\*\*)?(?:user|human|用户|我)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s?(.*)$/iu
+const LOOSE_MODEL = /^\s*(?:\*\*)?(?:model|assistant|ai|bot|助手|模型)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s?(.*)$/iu
+/**
+ * A reasoning block. It belongs to the next assistant message, which is how
+ * people write it: the thought, then the answer it produced.
+ */
+const LOOSE_THINK = /^\s*(?:\*\*)?(?:思维|思考|thinking|reasoning)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s?(.*)$/iu
+
+/** Whether a parsed turn list carries at least one real message. */
+function hasMessage(turns) {
+  return turns.some((turn) => turn.blocks.some((entry) => entry.text !== '' && speakerOf(entry.label) !== 'other'))
+}
+
+/**
+ * Split a hand-written transcript into turns.
+ *
+ * Recognises the plain `user:` / `model:` shape - the label on its own line, or
+ * `label: text` on one line. Labels inside a fenced code block are ignored,
+ * because a transcript about code regularly contains lines like `user: root`.
+ *
+ * A `思维:` / `思考:` block is collected and attached to the next assistant
+ * message as its reasoning, so a hand-written transcript can carry the chain of
+ * thought instead of flattening it into the answer.
+ *
+ * Blocks are labelled 用户 / 助手 so the rest of the importer treats them
+ * exactly like a transcript this plugin exported.
+ *
+ * @param text - the pasted transcript.
+ * @returns `{ title, turns }`, the same shape `readMarkdownBlocks` returns.
+ */
+function readLooseTurns(text) {
+  const lines = String(text ?? '').split(/\r?\n/u)
+  const turns = []
+  let block = null
+  // Where plain continuation lines go: the current message, or the reasoning
+  // block being collected for the next assistant message.
+  let sink = null
+  let reasoning = null
+  let fence = ''
+  for (const line of lines) {
+    const fenceMatch = /^\s*(`{3,}|~{3,})/u.exec(line)
+    if (fenceMatch !== null) {
+      if (fence === '') fence = fenceMatch[1][0].repeat(3)
+      else if (line.trimStart().startsWith(fence)) fence = ''
+    }
+    if (fence === '') {
+      const think = LOOSE_THINK.exec(line)
+      if (think !== null) {
+        // Several 思维 blocks in a row describe one thought; they join rather
+        // than replace each other.
+        if (reasoning === null) reasoning = { lines: [] }
+        if (think[1] !== '') reasoning.lines.push(think[1])
+        sink = reasoning
+        continue
+      }
+      const user = LOOSE_USER.exec(line)
+      const model = user === null ? LOOSE_MODEL.exec(line) : null
+      const match = user ?? model
+      if (match !== null) {
+        const isUser = user !== null
+        block = { label: isUser ? '用户' : '助手', lines: [], reasoning: '' }
+        if (!isUser && reasoning !== null) {
+          block.reasoning = reasoning.lines.join('\n')
+          reasoning = null
+        }
+        if (match[1] !== '') block.lines.push(match[1])
+        // A new user turn starts a new round; consecutive assistant blocks
+        // stay in the one the user opened.
+        if (turns.length === 0 || isUser) turns.push({ index: turns.length + 1, blocks: [] })
+        turns[turns.length - 1].blocks.push(block)
+        sink = block
+        continue
+      }
+    }
+    if (sink !== null) sink.lines.push(line)
+  }
+  for (const turn of turns) {
+    for (const entry of turn.blocks) {
+      entry.text = entry.lines.join('\n').replace(/^\n+/u, '').replace(/\s+$/u, '')
+    }
+  }
+  return { title: '', turns }
+}
+
+/**
  * Synthesize a minimal event stream from a Markdown transcript.
  *
  * One user/assistant pair becomes one step; an assistant block with no user
@@ -231,8 +321,58 @@ function speakerOf(label) {
  * @returns `{ events, title, warnings, turns, messages }`.
  */
 export function eventsFromMarkdown(text, options = {}) {
+  // A Chatbox export is neither this plugin's Markdown nor a hand-written one,
+  // so it is recognised first and its own structure decides the roles.
+  const chatbox = readChatbox(text)
+  let parsed = chatbox
+  if (parsed === null) {
+    // The strict reader knows this plugin's own export. A transcript pasted
+    // from another chat tool is plain `user:` / `model:` and falls through to
+    // the loose reader, which is only tried when the strict one found nothing.
+    const strict = readMarkdownBlocks(text)
+    parsed = hasMessage(strict.turns) ? strict : readLooseTurns(text)
+  }
+  return emitFromTurns(parsed.turns, { now: options.now, title: parsed.title })
+}
+
+/**
+ * Turn messages the user authored in the composer into a session event stream.
+ *
+ * This is the same pipeline an import takes, minus the parsing: the composer
+ * already knows who said what, so it hands over `[{ role, text, reasoning }]`
+ * and gets back the events a session is seeded with.
+ *
+ * @param messages - `[{ role: 'user'|'assistant', text, reasoning? }]`.
+ * @param options - `{ now?, title? }`.
+ * @returns `{ events, title, warnings, turns, messages }`.
+ */
+export function eventsFromDialogue(messages, options = {}) {
+  const kept = (Array.isArray(messages) ? messages : []).filter(
+    (message) =>
+      message !== null &&
+      typeof message === 'object' &&
+      (typeof message.text === 'string' ? message.text.trim() : '') !== '',
+  )
+  if (kept.length === 0) throw new ImportError('no-messages', '还没有写任何内容，先填一条用户或模型消息')
+  return emitFromTurns(dialogueTurns(kept), {
+    now: options.now,
+    title: options.title,
+    fallbackTitle: '新建的会话',
+  })
+}
+
+/**
+ * Emit one session's worth of events from parsed turns.
+ *
+ * @param turns - `[{ index, blocks: [{ label, text, reasoning }] }]`.
+ * @param options - `{ now?, title? }`.
+ */
+function emitFromTurns(turns, options = {}) {
   const now = options.now ?? Date.now()
-  const { title, turns } = readMarkdownBlocks(text)
+  const title = options.title ?? ''
+  // What to call a session the source never named. An import keeps the old
+  // wording; a composed dialogue is not "imported" from anywhere.
+  const fallbackTitle = options.fallbackTitle ?? '导入的会话'
   const events = []
   const warnings = []
   let messages = 0
@@ -255,13 +395,18 @@ export function eventsFromMarkdown(text, options = {}) {
     }, 'append')
     messages += 1
   }
-  const assistantEvent = (turn, step, body) => {
+  const assistantEvent = (turn, step, body, reasoning = '') => {
+    const content = []
+    // Reasoning first: that is the order the model produced it in, and the
+    // transcript renderer folds it above the answer.
+    if (reasoning !== '') content.push({ type: 'reasoning', text: reasoning })
+    content.push({ type: 'text', text: body })
     push('assistant/message', {
       turn,
       step,
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: body }],
+        content,
         source: { kind: 'model', provider: 'dsh-chat-export', model: 'imported' },
         id: randomUUID(),
       },
@@ -285,7 +430,7 @@ export function eventsFromMarkdown(text, options = {}) {
         pending.push(entry.text)
         continue
       }
-      steps.push({ users: pending, assistant: entry.text })
+      steps.push({ users: pending, assistant: entry.text, reasoning: entry.reasoning ?? '' })
       pending = []
     }
     if (pending.length > 0) steps.push({ users: pending, assistant: null })
@@ -296,23 +441,36 @@ export function eventsFromMarkdown(text, options = {}) {
     steps.forEach((step, index) => {
       const stepNumber = index + 1
       push('step/start', { turn: turnNumber, step: stepNumber })
+      // The first surface node must be a protected system head. Without one the
+      // store refuses to load the log ("system/message requires a protected
+      // first surface head"), so the import would only look fine until it was
+      // reopened. An empty head is deliberate: a resumed Agent replaces it with
+      // the real prompt instead of appending one after the imported history.
+      if (turnNumber === 1 && index === 0) {
+        push('system/message', {
+          turn: turnNumber,
+          step: stepNumber,
+          message: { role: 'system', content: [], source: { kind: 'system-prompt' }, id: randomUUID() },
+        }, 'append')
+      }
       for (const body of step.users) userEvent(body)
-      if (step.assistant !== null) assistantEvent(turnNumber, stepNumber, step.assistant)
+      if (step.assistant !== null) assistantEvent(turnNumber, stepNumber, step.assistant, step.reasoning)
       push('step/end', { turn: turnNumber, step: stepNumber })
     })
     push('turn/end', { turn: turnNumber, reason: { kind: 'completed' } })
   }
 
-  if (messages === 0) throw new ImportError('no-messages', '这份 Markdown 里没有识别出任何用户或助手消息')
+  if (messages === 0) throw new ImportError('no-messages', '没有识别出任何用户或助手消息')
 
   const firstUser = events.find((event) => event.type === 'user/message')
+  const resolved = title === '' ? fallbackTitle : title
   push('session/title', {
-    title: title === '' ? '导入的会话' : title,
+    title: resolved,
     messageSeqs: firstUser === undefined ? [] : [firstUser.seq],
     source: { kind: 'fallback' },
   })
 
-  return { events, title: title === '' ? '导入的会话' : title, warnings, turns: turnNumber, messages }
+  return { events, title: resolved, warnings, turns: turnNumber, messages }
 }
 
 /**

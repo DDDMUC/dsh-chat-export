@@ -660,36 +660,170 @@ describe('remembering the dialog options', () => {
   })
 })
 
+/** Render the header action with the dialog open. */
+async function renderOpenDialog(entryOverrides = {}) {
+  const { exports, styles } = await loadClient()
+  const { ctx, registrations } = stubCtx()
+  exports.apply(ctx)
+  const { component } = registrations[0]
+  const entry = { open: true, tab: 'export', form: exports.defaultForm(), ...entryOverrides }
+  const tree = component({
+    sessionId: 'session-1',
+    useChatExport: (select) => select({ bySession: { 'session-1': entry } }),
+    controller: {
+      open: () => {},
+      close: () => {},
+      clearNotice: () => {},
+      setTab: () => {},
+      setField: () => {},
+      patch: () => {},
+    },
+    t: (key) => key,
+  })
+  // children: [button, dialog, toast|null]; the dialog is a component, so it
+  // has to be called once before its Modal element exists.
+  const dialogNode = tree.children[1]
+  const modal = dialogNode.type(dialogNode.props)
+  return { modal, exports, styles }
+}
+
+describe('composing a dialogue', () => {
+  it('starts with one box for each side', async () => {
+    const { exports } = await loadClient()
+    const controller = new exports.ChatExportController()
+    expect(controller.entryOf('s1').compMessages.map((message) => message.role)).toEqual(['user', 'assistant'])
+  })
+
+  it('adds a whole round with one click', async () => {
+    const { exports } = await loadClient()
+    const controller = new exports.ChatExportController()
+    controller.addComposeRound('s1')
+    expect(controller.entryOf('s1').compMessages.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+    ])
+  })
+
+  it('adds, removes, and reorders boxes', async () => {
+    const { exports } = await loadClient()
+    const controller = new exports.ChatExportController()
+    controller.addComposeMessage('s1', 'assistant')
+    expect(controller.entryOf('s1').compMessages).toHaveLength(3)
+
+    controller.setComposeMessage('s1', 2, { text: '第三条' })
+    controller.moveComposeMessage('s1', 2, -1)
+    expect(controller.entryOf('s1').compMessages[1].text).toBe('第三条')
+
+    controller.removeComposeMessage('s1', 1)
+    expect(controller.entryOf('s1').compMessages).toHaveLength(2)
+    // A move past either end is a no-op rather than an error.
+    controller.moveComposeMessage('s1', 0, -1)
+    expect(controller.entryOf('s1').compMessages[0].role).toBe('user')
+  })
+
+  it('refuses an empty draft without calling the host', async () => {
+    const fetchImpl = stubFetch(() => response({ ok: true }))
+    const { exports } = await loadClient()
+    const controller = new exports.ChatExportController(fetchImpl, () => {})
+    await controller.runCompose('s1')
+    expect(fetchImpl.calls).toHaveLength(0)
+    expect(controller.entryOf('s1').compError).toBe('compose.empty')
+  })
+
+  it('posts the authored messages and reports the new session', async () => {
+    const fetchImpl = stubFetch(() => response({ ok: true, sessionId: 'session-new', title: '我的对话', messages: 2 }))
+    const { exports } = await loadClient()
+    const controller = new exports.ChatExportController(fetchImpl, () => {})
+    controller.open('s1')
+    controller.setComposeField('s1', 'compTitle', '我的对话')
+    controller.setComposeMessage('s1', 0, { text: '你好' })
+    controller.setComposeMessage('s1', 1, { text: '在的', reasoning: '先打招呼' })
+    await controller.runCompose('s1')
+
+    expect(fetchImpl.calls[0].url).toBe('/api/dsh-chat-export.compose')
+    const body = JSON.parse(fetchImpl.calls[0].init.body)
+    expect(body.title).toBe('我的对话')
+    expect(body.cwd).toBeUndefined()
+    expect(body.messages).toEqual([
+      { role: 'user', text: '你好', reasoning: '' },
+      { role: 'assistant', text: '在的', reasoning: '先打招呼' },
+    ])
+    const entry = controller.entryOf('s1')
+    expect(entry.compBusy).toBe(false)
+    expect(entry.notice).toEqual({ kind: 'composed', title: '我的对话', count: 2 })
+  })
+
+  it('skips boxes with no body', async () => {
+    const fetchImpl = stubFetch(() => response({ ok: true, title: 'T', messages: 1 }))
+    const { exports } = await loadClient()
+    const controller = new exports.ChatExportController(fetchImpl, () => {})
+    controller.setComposeMessage('s1', 0, { text: '只有这条' })
+    await controller.runCompose('s1')
+    expect(JSON.parse(fetchImpl.calls[0].init.body).messages).toHaveLength(1)
+  })
+
+  it('sends the custom path when the picker is on it', async () => {
+    const fetchImpl = stubFetch(() => response({ ok: true, title: 'T', messages: 1 }))
+    const { exports } = await loadClient()
+    const controller = new exports.ChatExportController(fetchImpl, () => {})
+    controller.setComposeMessage('s1', 0, { text: 'x' })
+    controller.setComposeField('s1', 'compCwd', '__custom__')
+    controller.setComposeField('s1', 'compCustomCwd', '/Users/me/notes')
+    await controller.runCompose('s1')
+    expect(JSON.parse(fetchImpl.calls[0].init.body).cwd).toBe('/Users/me/notes')
+  })
+
+  it('gives the reasoning box to the model only', async () => {
+    const { modal } = await renderOpenDialog({
+      tab: 'compose',
+      workspacesLoaded: true,
+      compMessages: [
+        { role: 'user', text: '你好', reasoning: '' },
+        { role: 'assistant', text: '在的', reasoning: '先打招呼' },
+      ],
+    })
+    const body = modal.children.children[1]
+    const rendered = body.type(body.props)
+    const list = rendered.children.find((child) => child?.props?.className === 'dshce-comp-list')
+    const [userCard, modelCard] = list.children.map((child) => child.type(child.props))
+    const countAreas = (node) => {
+      if (node === null || node === undefined) return 0
+      if (Array.isArray(node)) return node.reduce((sum, child) => sum + countAreas(child), 0)
+      if (typeof node !== 'object') return 0
+      return (node.type === 'textarea' ? 1 : 0) + countAreas(node.children)
+    }
+    // A human has no chain of thought: only the body box.
+    expect(countAreas(userCard)).toBe(1)
+    expect(countAreas(modelCard)).toBe(2)
+    // Reasoning sits above the body: it happens first, and the transcript
+    // shows it above the answer too.
+    const labelOf = (field) => field.children[0].props.children
+    expect(labelOf(modelCard.children[1])).toBe('compose.cot')
+    expect(labelOf(modelCard.children[2])).toBe('compose.text')
+  })
+
+  it('loads the workspace list once, even when the request fails', async () => {
+    const fetchImpl = stubFetch(() => response({ ok: true, workspaces: [{ id: 'w1', path: '/tmp/a' }] }))
+    const { exports } = await loadClient()
+    const controller = new exports.ChatExportController(fetchImpl, () => {})
+    await controller.loadWorkspaces('s1')
+    await controller.loadWorkspaces('s1')
+    expect(fetchImpl.calls).toHaveLength(1)
+    expect(controller.entryOf('s1').workspaces).toEqual([{ id: 'w1', path: '/tmp/a' }])
+
+    const failing = stubFetch(() => response({ ok: false, status: 500 }, 'boom'))
+    const second = new exports.ChatExportController(failing, () => {})
+    await second.loadWorkspaces('s1')
+    expect(second.entryOf('s1').workspacesLoaded).toBe(true)
+    expect(failing.calls).toHaveLength(1)
+  })
+})
+
 describe('resizing the dialog', () => {
   const limits = { minWidth: 460, minHeight: 320, maxWidth: 1400, maxHeight: 900 }
   const start = { width: 760, height: 600 }
-
-  /** Render the header action with the dialog open. */
-  async function renderOpenDialog(entryOverrides = {}) {
-    const { exports, styles } = await loadClient()
-    const { ctx, registrations } = stubCtx()
-    exports.apply(ctx)
-    const { component } = registrations[0]
-    const entry = { open: true, tab: 'export', form: exports.defaultForm(), ...entryOverrides }
-    const tree = component({
-      sessionId: 'session-1',
-      useChatExport: (select) => select({ bySession: { 'session-1': entry } }),
-      controller: {
-        open: () => {},
-        close: () => {},
-        clearNotice: () => {},
-        setTab: () => {},
-        setField: () => {},
-        patch: () => {},
-      },
-      t: (key) => key,
-    })
-    // children: [button, dialog, toast|null]; the dialog is a component, so it
-    // has to be called once before its Modal element exists.
-    const dialogNode = tree.children[1]
-    const modal = dialogNode.type(dialogNode.props)
-    return { modal, exports, styles }
-  }
 
   it('hands the dialog a class it can size', async () => {
     const { modal } = await renderOpenDialog()

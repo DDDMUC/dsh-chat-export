@@ -103,17 +103,19 @@ describe('plugin shape', () => {
 })
 
 describe('apply', () => {
-  it('registers the export and import commands and six routes', () => {
+  it('registers the export and import commands and eight routes', () => {
     const { ctx, routes, commands } = stubContext()
     apply(ctx)
     expect(commands.map((command) => command.name)).toEqual(['export-md', 'import-session'])
     expect([...routes.keys()].sort()).toEqual([
+      `${API_PREFIX}.compose`,
       `${API_PREFIX}.export`,
       `${API_PREFIX}.import`,
       `${API_PREFIX}.import-zip`,
       `${API_PREFIX}.pending`,
       `${API_PREFIX}.preview`,
       `${API_PREFIX}.save`,
+      `${API_PREFIX}.workspaces`,
     ])
   })
 

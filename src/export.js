@@ -8,11 +8,71 @@
 import { buildTranscript, attachmentKey } from './transcript.js'
 import { renderMarkdown } from './markdown.js'
 import { renderText } from './text.js'
-import { renderHtml } from './html.js'
+import { escapeHtml, renderHtml } from './html.js'
 import { buildZip } from './zip.js'
 import { buildLogArtifact, LOG_FILENAME } from './log.js'
 import { effectiveImageMode, exportBaseName, exportFilename, contentTypeFor, PLUGIN_ID } from './options.js'
 import { mediaExtension } from './sources.js'
+
+/** Push every ATX heading down one level, so a child keeps its own outline. */
+function demoteHeadings(markdown) {
+  return markdown.replace(/^(#{1,5}) /gmu, '#$1 ')
+}
+
+/**
+ * The Markdown appendix: one section per subagent, in discovery order.
+ *
+ * Children are appended rather than inlined at the delegation call: the parent
+ * log records the call, not the child's id, so matching them would be a guess.
+ */
+function withMarkdownSubagents(markdown, children, imageSrc) {
+  if (children.length === 0) return markdown
+  const parts = [markdown, '\n\n---\n\n', `# 子会话（${children.length}）\n`]
+  for (const child of children) {
+    const title = child.transcript.meta.title === '' ? child.header.id : child.transcript.meta.title
+    const arrow = child.depth > 1 ? `${'↳ '.repeat(child.depth - 1)}` : ''
+    parts.push(`\n## ${arrow}${title}\n\n`)
+    parts.push(`> 派生自主会话 · 深度 ${child.depth} · \`${child.header.id}\`\n\n`)
+    parts.push(demoteHeadings(renderMarkdown(child.transcript, { imageSrc })))
+    parts.push('\n')
+  }
+  return parts.join('')
+}
+
+/** The body of a rendered document, without its own header, footer, or script. */
+function innerBody(document) {
+  const start = document.indexOf('<body>')
+  const end = document.lastIndexOf('</body>')
+  if (start < 0 || end < 0) return document
+  return document
+    .slice(start + '<body>'.length, end)
+    .replace(/<header>[\s\S]*?<\/header>/u, '')
+    .replace(/<footer>[\s\S]*?<\/footer>/u, '')
+    .replace(/<script>[\s\S]*?<\/script>/gu, '')
+}
+
+/**
+ * The HTML appendix. Each child keeps the markup it was rendered with, minus
+ * the parts that belong to a standalone document.
+ */
+function withHtmlSubagents(document, children, imageSrc) {
+  if (children.length === 0) return document
+  const sections = children.map((child) => {
+    const title = child.transcript.meta.title === '' ? child.header.id : child.transcript.meta.title
+    const meta = `派生自主会话 · 深度 ${child.depth} · ${child.header.id}`
+    return [
+      '<section class="subagent">',
+      `<h2>${escapeHtml(title)}</h2>`,
+      `<p class="subagent-meta">${escapeHtml(meta)}</p>`,
+      innerBody(renderHtml(child.transcript, { imageSrc })),
+      '</section>',
+    ].join('\n')
+  })
+  const anchor = document.lastIndexOf('<footer>')
+  const block = `<div class="subagent-list">\n<h1>子会话（${children.length}）</h1>\n${sections.join('\n')}\n</div>\n`
+  if (anchor < 0) return document.replace('</body>', `${block}</body>`)
+  return `${document.slice(0, anchor)}${block}${document.slice(anchor)}`
+}
 
 /** Sanitize one path segment derived from an untrusted attachment name. */
 function safeSegment(value, fallback) {
@@ -66,6 +126,15 @@ export async function produceExport(input) {
   const transcript = buildTranscript(header, events, options, sink)
   if (typeof input.title === 'string' && input.title !== '') transcript.meta.title = input.title
 
+  // Build the children before asset paths are assigned: their images go into
+  // the same sink, so one archive carries every attachment both documents use.
+  const children = (Array.isArray(input.subagents) ? input.subagents : []).map((child) => {
+    const childTranscript = buildTranscript(child.header, child.events, options, sink)
+    const title = typeof child.title === 'string' && child.title !== '' ? child.title : childTranscript.meta.title
+    if (title !== '') childTranscript.meta.title = title
+    return { header: child.header, depth: child.depth ?? 1, transcript: childTranscript }
+  })
+
   // Assign every asset its final archive path up front: the renderers need the
   // paths, and the paths have to be stable across the Markdown, the HTML, and
   // the archive listing.
@@ -98,7 +167,7 @@ export async function produceExport(input) {
   }
 
   const baseName = exportBaseName(transcript.meta.title, transcript.meta.createdAt)
-  const markdown = renderMarkdown(transcript, { imageSrc })
+  const markdown = withMarkdownSubagents(renderMarkdown(transcript, { imageSrc }), children, imageSrc)
   const format = options.format
 
   if (format === 'md') {
@@ -131,7 +200,7 @@ export async function produceExport(input) {
   }
 
   if (format === 'html') {
-    const html = renderHtml(transcript, { imageSrc })
+    const html = withHtmlSubagents(renderHtml(transcript, { imageSrc }), children, imageSrc)
     return {
       format,
       baseName,
@@ -163,7 +232,8 @@ export async function produceExport(input) {
   }
 
   // A bundle references its assets relatively, so the same HTML renders on disk.
-  const bundleHtml = renderHtml(transcript, { imageSrc: (ref) => imagePaths.get(attachmentKey(ref)) ?? null })
+  const bundleSrc = (ref) => imagePaths.get(attachmentKey(ref)) ?? null
+  const bundleHtml = withHtmlSubagents(renderHtml(transcript, { imageSrc: bundleSrc }), children, bundleSrc)
   const bundleText = renderText(transcript)
   const entries = [
     { path: `${baseName}.md`, data: markdown },

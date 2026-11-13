@@ -30,7 +30,10 @@ import {
 import { produceExport, dataUri } from './export.js'
 import { exportServices, readFileBytes, readImageBytes, readSessionLog, readSessionTitle, writeTextFile } from './sources.js'
 import { parseLogArtifact } from './log.js'
-import { ImportError, createImportedSession, eventsFromMarkdown, importZipAssets, planImport, rewriteAttachmentRefs } from './import.js'
+import { ImportError, createImportedSession, eventsFromDialogue, eventsFromMarkdown, importZipAssets, planImport, rewriteAttachmentRefs } from './import.js'
+import { looksLikeChatboxJson } from './chatbox.js'
+import { loadSubagents } from './subagents.js'
+import { convertDeepseekSession, fileEntriesOf, looksLikeDeepseekExport, rankSessions, readDeepseekExport } from './deepseek.js'
 import { readZip } from './zip.js'
 
 /** Cordis plugin name. */
@@ -178,10 +181,16 @@ async function buildArtifact(ctx, state, resolved, signal) {
   if (log === undefined) throw new ExportError(404, 'session-not-found', 'no stored log was found for this session')
 
   const title = await readSessionTitle(services, resolved.sessionId, log.events, signal)
+  // Subagent conversations live in their own session files, so they have to be
+  // found and read separately; the parent log only knows they were delegated.
+  const subagents = resolved.options.subagents === false
+    ? []
+    : await loadSubagents(ctx, services, resolved.sessionId, signal)
   const artifact = await produceExport({
     header: log.header,
     events: log.events,
     title,
+    subagents,
     options: resolved.options,
     loadImage: (ref) => readImageBytes(services, ref, signal),
     loadFile: (ref) => readFileBytes(services, ref, signal),
@@ -291,6 +300,10 @@ export function detectImportKind(path, text, forced) {
   if (forced === 'log' || forced === 'markdown') return forced
   const lower = String(path ?? '').toLowerCase()
   if (lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.txt')) return 'markdown'
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'markdown'
+  // A Chatbox backup is a dialogue, not a session log, even though it is JSON.
+  // The shape decides, because `.json` is also the log's extension.
+  if (looksLikeChatboxJson(text)) return 'markdown'
   if (lower.endsWith('.jsonl') || lower.endsWith('.json') || lower.endsWith('.ndjson')) return 'log'
   const head = String(text ?? '').trimStart().slice(0, 1)
   return head === '{' || head === '[' ? 'log' : 'markdown'
@@ -354,6 +367,216 @@ export async function runImport(ctx, request) {
 }
 
 /**
+ * Create a session out of messages the user typed into the composer.
+ *
+ * Same landing as an import - a real, continuable session in a workspace - but
+ * the content never existed as a file. An empty draft is refused rather than
+ * creating an empty session, and a message with no body is skipped so a stray
+ * blank box does not become an empty bubble in the transcript.
+ *
+ * @param ctx - host context.
+ * @param request - `{ messages, title?, cwd?, dryRun? }`.
+ * @returns a JSON-ready summary.
+ */
+export async function runCompose(ctx, request) {
+  const now = Date.now()
+  const raw = Array.isArray(request.messages) ? request.messages : []
+  const messages = raw
+    .map((message) => {
+      const item = message !== null && typeof message === 'object' ? message : {}
+      const role = item.role === 'user' ? 'user' : 'assistant'
+      return {
+        role,
+        text: typeof item.text === 'string' ? item.text : '',
+        // Only the model has a chain of thought; anything a client sends on a
+        // user turn is discarded here rather than silently dropped later.
+        reasoning: role === 'assistant' && typeof item.reasoning === 'string' ? item.reasoning : '',
+      }
+    })
+    .filter((message) => message.text.trim() !== '')
+
+  const title = typeof request.title === 'string' ? request.title.trim() : ''
+  const built = eventsFromDialogue(messages, { now, title })
+  const plan = planImport(
+    { header: {}, events: built.events, title: built.title, warnings: built.warnings },
+    { cwd: request.cwd, title: title === '' ? built.title : title, now },
+  )
+
+  const summary = {
+    kind: 'compose',
+    sessionId: plan.header.id,
+    title: plan.title,
+    eventCount: plan.events.length,
+    turns: built.turns,
+    messages: built.messages,
+    warnings: plan.warnings,
+  }
+  if (request.dryRun === true) return { ok: true, dryRun: true, ...summary }
+
+  const created = await createImportedSession(ctx, plan, { signal: request.signal, attach: true })
+  return { ok: true, dryRun: false, ...summary, attached: created.attached, workspace: created.workspace }
+}
+
+/**
+ * The workspaces this profile already knows about, for the composer's picker.
+ *
+ * @param ctx - host context.
+ * @returns `{ ok, workspaces: [{ id, path }] }`.
+ */
+export function listWorkspaces(ctx) {
+  const registry = ctx.get('workspaceRegistry')
+  const all = registry !== undefined && typeof registry.list === 'function' ? registry.list() : []
+  const workspaces = (Array.isArray(all) ? all : [])
+    .map((workspace) => {
+      const path = typeof workspace?.path === 'string' ? workspace.path : ''
+      // The sidebar shows a workspace by its title ("Default Project"), not by
+      // its directory, so the picker does the same and falls back to the path
+      // only when the record has no title.
+      const title = typeof workspace?.title === 'string' ? workspace.title.trim() : ''
+      return { id: String(workspace?.id ?? ''), path, title: title === '' ? path : title }
+    })
+    .filter((workspace) => workspace.path !== '')
+  return { ok: true, workspaces }
+}
+
+/**
+ * Import one conversation out of a DeepSeek chat export.
+ *
+ * The archive holds every conversation the account had. This plugin creates one
+ * session per import, so the newest conversation is taken unless the caller
+ * names one; the rest are reported rather than silently dropped.
+ *
+ * @param ctx - host context.
+ * @param request - `{ zip, cwd?, title?, sessionId?, dryRun?, attach?, signal? }`.
+ * @param entries - the archive's entries.
+ * @returns a JSON-ready summary.
+ */
+export async function runImportDeepseek(ctx, request, entries) {
+  const now = Date.now()
+  let parsed
+  try {
+    parsed = readDeepseekExport(entries)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new ImportError('unreadable-archive', `这个 DeepSeek 导出读不了：${reason}`)
+  }
+
+  const ranked = rankSessions(parsed.index)
+  if (ranked.length === 0) throw new ImportError('no-conversations', '这个 DeepSeek 导出里没有列出任何会话')
+
+  const wanted = typeof request.sessionId === 'string' && request.sessionId !== '' ? request.sessionId : undefined
+  if (wanted !== undefined && !ranked.some((row) => row.id === wanted)) {
+    throw new ImportError('session-not-found', `这个导出里没有会话 ${wanted}`)
+  }
+  // One session per conversation. The default is the newest one, which is what
+  // a single-file import means everywhere else in this plugin; `limit` widens
+  // it to a batch, newest first.
+  const limit = Number.isInteger(request.limit) && request.limit > 0 ? request.limit : 1
+  const targets = wanted === undefined ? ranked.slice(0, limit) : ranked.filter((row) => row.id === wanted)
+
+  const store = ctx.get('attachments')
+  const imported = []
+  const failed = []
+  for (const target of targets) {
+    const file = parsed.sessions.get(target.id)
+    if (file === undefined) {
+      failed.push({ id: target.id, reason: 'unreadable-archive' })
+      continue
+    }
+
+    // Images live inside the archive, so they are stored before conversion and
+    // handed over as refs; the converter itself stays pure.
+    const files = fileEntriesOf(file)
+    const images = new Map()
+    let savedImages = 0
+    if (request.dryRun !== true && store !== undefined && typeof store.saveImage === 'function') {
+      for (const entry of files) {
+        if (!entry.isImage || entry.exportPath === undefined) continue
+        const bytes = entries.get(entry.exportPath)
+        if (bytes === undefined) continue
+        try {
+          const ref = await store.saveImage({ data: bytes, mediaType: entry.mediaType, name: entry.name })
+          if (ref !== undefined && ref !== null) {
+            images.set(entry.id, ref)
+            savedImages += 1
+          }
+        } catch {
+          // A refused image still becomes a card, just without bytes.
+        }
+      }
+    }
+
+    let built
+    try {
+      built = convertDeepseekSession(file, { now, images })
+    } catch (error) {
+      failed.push({ id: target.id, reason: error instanceof Error ? error.message : String(error) })
+      continue
+    }
+
+    const plan = planImport(
+      { header: built.header, events: built.events, title: built.title, warnings: built.warnings },
+      { cwd: request.cwd, title: request.title ?? built.title, now },
+    )
+    if (files.length > 0) {
+      plan.warnings.push(
+        request.dryRun === true
+          ? `这份会话带 ${files.length} 个附件`
+          : `附件 ${files.length} 个：图片写回 ${savedImages} 个，其余显示为无内容的文件卡片`,
+      )
+    }
+
+    const summary = {
+      sourceId: target.id,
+      sessionId: plan.header.id,
+      title: plan.title,
+      eventCount: plan.events.length,
+      files: files.length,
+      images: savedImages,
+      warnings: plan.warnings,
+    }
+    if (request.dryRun === true) {
+      imported.push(summary)
+      continue
+    }
+    const created = await createImportedSession(ctx, plan, { signal: request.signal, attach: request.attach })
+    imported.push({ ...summary, attached: created.attached })
+  }
+
+  if (imported.length === 0) {
+    const reason = failed[0]?.reason ?? 'unknown'
+    throw new ImportError('no-messages', `会话 ${failed[0]?.id ?? ''} 无法导入：${reason}`)
+  }
+
+  const first = imported[0]
+  const warnings = [...first.warnings]
+  if (ranked.length > imported.length) {
+    warnings.push(
+      `这个导出有 ${ranked.length} 个会话，导入了最新的 ${imported.length} 个；要换一个用 --session=<id>，要更多用 --limit=N`,
+    )
+  }
+  if (failed.length > 0) warnings.push(`${failed.length} 个会话无法导入`)
+
+  return {
+    ok: true,
+    dryRun: request.dryRun === true,
+    kind: 'deepseek',
+    // The first conversation keeps the flat fields, so a single-session import
+    // reads exactly like every other import this plugin does.
+    sessionId: first.sessionId,
+    title: first.title,
+    eventCount: first.eventCount,
+    available: ranked.length,
+    sourceId: first.sourceId,
+    files: first.files,
+    images: first.images,
+    imported,
+    failed,
+    warnings,
+  }
+}
+
+/**
  * Import a ZIP bundle: its `log.jsonl` seeds the session, and `assets.json`
  * names the images to write back into the attachment store.
  *
@@ -368,6 +591,9 @@ export async function runImportZip(ctx, request) {
   const zip = Buffer.isBuffer(request.zip) ? request.zip : Buffer.from(request.zip ?? '')
   if (zip.length === 0) throw new ImportError('invalid', '没有收到 ZIP 内容')
   const entries = readZip(zip)
+  // A DeepSeek chat export is a ZIP too, but it is a different protocol: it
+  // carries a manifest and one file per conversation instead of a session log.
+  if (looksLikeDeepseekExport(entries)) return runImportDeepseek(ctx, request, entries)
   const logName = [...entries.keys()].find((name) => name.toLowerCase().endsWith('.jsonl'))
   if (logName === undefined) {
     throw new ImportError('no-log', '这个 ZIP 里没有会话日志：导出时请附带日志（ZIP 的 withLog / --with-log）')
@@ -638,6 +864,39 @@ export function apply(ctx, config = {}) {
   })
 
   connection.fetch.register({
+    path: `${API_PREFIX}.compose`,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      try {
+        const body = await readJsonBody(request)
+        const result = await runCompose(ctx, {
+          messages: body.messages,
+          title: typeof body.title === 'string' && body.title !== '' ? body.title : undefined,
+          cwd: typeof body.cwd === 'string' && body.cwd !== '' ? body.cwd : undefined,
+          dryRun: body.dryRun === true,
+          signal: request.signal,
+        })
+        return json(result)
+      } catch (error) {
+        return errorResponse(error)
+      }
+    },
+  })
+
+  connection.fetch.register({
+    path: `${API_PREFIX}.workspaces`,
+    methods: ['GET'],
+    fetch: async () => {
+      try {
+        return json(listWorkspaces(ctx))
+      } catch (error) {
+        return errorResponse(error)
+      }
+    },
+  })
+
+  connection.fetch.register({
     path: `${API_PREFIX}.import-zip`,
     methods: ['POST'],
     requestBody: 'buffered',
@@ -650,6 +909,9 @@ export function apply(ctx, config = {}) {
           zip,
           cwd: typeof body.cwd === 'string' && body.cwd !== '' ? body.cwd : undefined,
           title: typeof body.title === 'string' && body.title !== '' ? body.title : undefined,
+          // A DeepSeek export holds many conversations; this names which one.
+          sessionId: typeof body.session === 'string' && body.session !== '' ? body.session : undefined,
+          limit: Number.isInteger(body.limit) ? body.limit : undefined,
           dryRun: body.dryRun === true,
           attach: body.attach !== false,
           signal: request.signal,

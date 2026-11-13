@@ -26,7 +26,8 @@
 
 - **两种入口** —— 会话头部的分享图标按钮（悬停显示「导出文字稿」），或 `/export-md` 斜杠命令（避开官方的 `/export`）；命令解析出的选项会带进对话框，两边永远不会打架
 - **五种格式** —— Markdown、HTML（单文件、自包含样式、可打印成 PDF）、纯文本（无任何标记，终端/记事本都能读）、ZIP（md + html + txt + 图片素材 + `meta.json`）、**会话日志 JSONL**（可回灌的原始事件流）
-- **真导入** —— `/import-session <文件>` 把 JSONL 日志（或 Markdown 文字稿）变回一个真实会话：走宿主的 `sessions.create({ seed })` + `sessionPersistence` 落盘 + `workspace.attachSession`，导入后能直接接着聊，不是一份只读的"假聊天记录"
+- **真导入** —— `/import-session <文件>` 把 JSONL 日志、Chatbox 导出（HTML / JSON）或文字稿（含手写的 `用户：` / `助手：` / `思维：`）变回一个真实会话：走宿主的 `sessions.create({ seed })` + `sessionPersistence` 落盘 + `workspace.attachSession`，导入后能直接接着聊，不是一份只读的"假聊天记录"
+- **手动新建对话** —— 对话框第三个 tab「新建」：自己写用户 / 模型消息，模型的消息可以单独写思维，填标题、选工作区，一键建成真实会话。正文为空的条目会跳过
 - **内容齐全** —— 用户/助手消息、思考块（可折叠）、工具调用与结果（可折叠、超长自动截断并标注）、代码块（围栏长度自适应，正文里的 ``` 撑不破）、图片附件、时间戳、会话标题 / 模型 / 用量统计
 - **提问有独立卡片** —— `ask_user_question` 不再是一坨 JSON：导出成「提问 · 2/2 已回答」卡片，问题正文、每个选项、以及你实际选中的那条（高亮 + ✓ 已选）都在，默认展开。**提问嵌在 `run_code` 程序里**也能认出来（解析代码里的对象字面量，答案按 `{id, selected}` 的形状在返回值里找）
 - **每行都有标题** —— 思考块用正文首行作预览（`思考 · 核对分支二的条件（32 字）`），工具行用调用的 `description`（`run_code · 查看 core/compatibility.py …`），跟聊天界面看到的一致
@@ -108,6 +109,8 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 | `--surface` / `--no-surface` | `--surface` 只导当前模型上下文；默认完整日志 |
 | `--images=auto\|embed\|assets\|none` | 图片策略；`auto` 表示单文件内嵌、ZIP 放 `assets/` |
 | `--limit=N` | 单条工具结果的字符上限（默认 4000，`0` 表示不截断） |
+| `--subagents` / `--no-subagents` | 子会话附录（**默认开**） |
+| `--limit=N` | DeepSeek 导出批量导入的会话数（默认 1，从新到旧） |
 | `--with-log` / `--no-with-log` | ZIP 里附带 `log.jsonl`（默认关） |
 | `--save[=目录]` | 写进目录而不是下载；不填目录则用会话工作目录下的 `dsh-chat-exports/` |
 
@@ -118,28 +121,89 @@ dsh plugin --profile web add link:/绝对路径/dsh-chat-export
 ```
 /import-session /tmp/导出/dsh-chat-xxx.jsonl         # 直接导入
 /import-session /tmp/导出/dsh-chat-xxx.jsonl --dry   # 只看会导入什么，不写盘
-/import-session /tmp/导出/dsh-chat-xxx.md            # Markdown 也能导（只有文本）
+/import-session /tmp/导出/dsh-chat-xxx.md            # Markdown / 纯文本也能导
+/import-session ./chatbox-export.html                # Chatbox 的 HTML 导出
+/import-session ./chatbox-backup.json                # Chatbox 的 JSON 备份
+/import-session ./deepseek_data-2026.zip             # DeepSeek 官网导出的整包
 /import-session ./log.jsonl --cwd=/Users/me/project  # 指定工作目录
 /import-session ./log.jsonl --title=导入的历史       # 指定标题
 ```
 
 它做的事：
 
-1. 读文件 → 按扩展名（再看首个字符）判断是 JSONL 日志还是 Markdown 文字稿
+1. 读文件 → 按扩展名（再看首个字符）判断用哪个解析器：JSONL 日志、Chatbox 导出、还是文字稿
 2. 剔除机器相关记录（`subagent/descriptor`、`request/header`、`tool/ptc-dispatch*`、`compaction/*` 等），把剩下的 `seq` 重排成**从 0 连续**（宿主对种子事件有这个硬要求），并把 `session/title.messageSeqs`、`surfaceOp` 里的 seq 引用一起重写
 3. `sessions.create(id, { seed })` 让宿主逐条校验并建会话 → `sessionPersistence.create(header)` 拿写句柄 → `append` 全部事件 → `close`
 4. `workspaceRegistry.create(cwd)` 拿到（或复用）该目录对应的工作区实体，再 `workspace.attachSession(id)` 挂进去，侧边栏立刻能看到
 
 导入后的会话是**正常可续聊的会话**：新消息照常追加，不是只读快照。
 
+**文字稿认哪些写法**
+
+自己的导出产物用 `## 回合 N` + `### 用户` / `### 助手`；手写的则认下面这些，冒号全角半角都行，`**加粗**` 也行：
+
+```
+用户：你好          user: hi          **User:** hi
+助手：你好呀         assistant: hello  模型：...
+思维：先判断意图     thinking: ...
+```
+
+`思维：` / `思考：` 会挂到**下一条**助手消息上，变成它的思考块（连续多个会拼接）。标签单独占一行、正文写在下面也可以；代码块里出现的 `user: root` 不会被误判成说话人。
+
 **两种来源的差别**
 
 | 来源 | 保留 | 丢失 |
 | --- | --- | --- |
 | JSONL 日志（`/export-md log` 或 ZIP 里的 `log.jsonl`） | 全部对话、思考、工具调用与结果、用量、时间戳 | 机器相关记录（见上）、图片二进制（引用还在，跨机可能失效） |
-| Markdown 文字稿 | 用户/助手文本，按轮次重建 | 工具调用、思考、图片、真实时间（一律记为导入时刻） |
+| Chatbox 导出（HTML / JSON） | 用户/助手文本、JSON 备份里的思考链 | 工具调用、图片、真实时间（一律记为导入时刻）；HTML 里的代码块只剩纯文本 |
+| 文字稿（Markdown / 纯文本） | 用户/助手文本，`思维：` 写的思考链 | 工具调用、图片、真实时间（一律记为导入时刻） |
 
 也可以走接口：`POST /api/dsh-chat-export.import`，body 为 `{ text }` 或 `{ path }`，加 `"dryRun": true` 只返回计划不落盘。
+
+### 手动新建对话
+
+不想先写成文件再导入？对话框第三个 tab「新建」可以直接写：
+
+- 每条消息一张卡片，**用户的靠左、模型的靠右**，一眼能看出对话形状
+- 卡片都有「正文」框；**只有模型的消息多一个「思维」框，且在正文上方**——思维发生在回答之前，跟导出里的渲染顺序一致。人没有思维链
+- 卡片可以上移、下移、删除；底部三个按钮：「＋ 用户」「＋ 模型」各补一条，「＋ 一轮」一次补一条用户 + 一条模型
+- 填标题（留空叫「新建的会话」），选工作区（现有工作区列表，或自己填路径）
+- 点「创建为新对话」→ 落到和导入完全一样的路径上，成为一个能继续聊的真实会话
+
+正文为空的卡片会被跳过，所以草稿里留几个空框不影响结果。
+
+对应接口是 `POST /api/dsh-chat-export.compose`（body `{ messages: [{ role, text, reasoning }], title?, cwd? }`），工作区列表是 `GET /api/dsh-chat-export.workspaces`。
+
+### DeepSeek 官网导出
+
+`chat.deepseek.com` 导出的 `deepseek_data-*.zip` 也能直接导：
+
+```
+manifest.json              { export_format_version: 3 }
+chat_session_index.json    [{ id, updated_at, ... }]
+chat_sessions/{id}.json    { title, current_message_id, messages: [{ parent_id, role, fragments }] }
+```
+
+映射规则照搬官方导入器：
+
+| 片段 / 状态 | 变成什么 |
+|---|---|
+| `REQUEST` | 用户消息正文 |
+| `RESPONSE` | 助手正文 |
+| `THINK` | 思考块 |
+| `TOOL_SEARCH` | `web_search` 调用 + 结果；`FAILED` 写成错误结果 |
+| `TOOL_OPEN` | `web_fetch` 调用（正文不在导出里，如实标注） |
+| `READ_LINK` | 逐行 `[title](url)` |
+| `FILE` | 图片写回附件库成为真图片；非图片（或没存成的图片）成为只有名字和大小的文件卡片 |
+| `CONTENT_FILTER` | 提问和回答一起丢弃 |
+| 状态不是 `FINISHED` | 该轮以错误行结束，提问保留 |
+| `TOOL_FIND` / `TOOL_IMAGE_SEARCH` / `PARTIAL_FILE_READ` / `TIP` | 忽略（官网也不显示） |
+
+**默认导一个，可以批量**：整包里可能有成百上千个会话。默认取 `updated_at` 最新的那个（`--session=<id>` 指定另一个），加 `--limit=N` 就按更新时间从新到旧导 N 个，每个会话建一个 DSH 会话。分支按 `current_message_id` 选，缺失时取 id 最大的消息。
+
+图片从压缩包里读出来存进附件库（`attachments.saveImage`），所以导进来的图能正常显示；非图片文件导出里本来就只有名字和大小，落成一张没有内容的卡片。
+
+**关于预设**：导入和新建的会话都**不带 `agentPreset`**——原会话的预设可能指向这个 profile 里根本不存在的名字，硬写进去会让宿主拒绝建会话。所以新会话走 profile 的默认预设，你可以创建后再切换。
 
 ### 产物长什么样
 
@@ -271,9 +335,12 @@ session-48310605-bb1a-4966-a207-380f947e220b
 - **「保存到目录」只支持 Markdown、HTML、纯文本和 JSONL 日志。** 宿主的 `ctx.fs` 只有文本写入、没有二进制写入；绕过它直接用 `node:fs` 会无视会话的沙箱策略。ZIP 请用浏览器下载（对话框里选 ZIP 时保存按钮会禁用并说明原因）。
 - **导入会丢机器相关记录。** `subagent/descriptor`、`request/header`、`request/context`、`tool/ptc-dispatch*`、`command/*`、`compaction/*` 这些要么指向另一台机器、要么指向被丢掉的事件，导入时会被剔除并在返回里逐类列出条数。对话、思考、工具调用与结果不受影响。
 - **图片：JSONL 单独导入不搬二进制**（附件引用原样保留，同机通常能取到，跨机缺失）；**ZIP 导入会把 `assets/` 里的图片写回附件库并重连引用**，所以跨机也能恢复。`files/` 里的普通文件暂不写回。
-- **Markdown 导入是有损的。** 只按轮次重建用户/助手文本；工具调用、思考、图片都回不来，时间统一记为导入时刻。要无损请用 `log` 格式。
+- **文字稿导入是有损的。** 只按轮次重建用户/助手文本（外加 `思维：` 写的思考链）；工具调用、图片都回不来，时间统一记为导入时刻。要无损请用 `log` 格式。Chatbox 的 HTML 导出同理，代码块只剩纯文本。
 - **导入会写进工作区。** 会话先经 `workspaceRegistry.create(cwd)` 取得（或复用）该目录的工作区实体，再 `attachSession`；目录已不存在时会退回注册表里的第一个工作区，并在返回里说明。
-- **不导出子会话（subagent）。** v0.1.0 只导当前会话；子会话递归打包留给后续版本（官方 ZIP 的 `includeDescendants` 是那块功能）。
+- **子会话是附录，不是原位。** 子代理的对话会作为「子会话」章节**追加在文末**，而不是嵌在触发它的那次工具调用旁边——父会话日志里记的是调用，没有子会话 id，硬要对齐只能靠猜。
+- **子会话只进 Markdown / HTML / ZIP。** 会话日志（JSONL）仍是单会话：导入时重建父子关系是另一回事，混进去只会让 `planImport` 猜。
+- **只算 `origin: 'subagent'` 的会话。** fork 也带 `parentSession`，但它是独立对话，卷进来等于把别人的会话复制一份。
+- **上限 50 个。** 递归展开子会话的子会话，超过上限就停，避免一次导出把整棵树拉进来。
 - **纯文本里的图片只能给描述**（`[图片] shot.png（640×480, 2.0 KiB）`），txt 装不下二进制。
 - **PDF 是浏览器打印出来的，不是插件生成的。** 产物是 HTML，点「打印 / 另存为 PDF」由浏览器负责排版。
 - **用量数字来自 `assistant/message.data.usage`。** 官方日志里**没有**费用字段，所以只能给 token，给不了钱；`推理` 一栏在不上报该字段的 provider 上是 0。
@@ -321,7 +388,8 @@ The official Session export hands you `dsh-session-<id>.zip` containing `session
 
 - **Two entry points** — a share-icon button in the Session header (labelled "Export transcript" on hover), or the `/export-md` command (which avoids the official `/export`). A typed line presets the dialog, so the two can never disagree.
 - **Five formats** — Markdown, self-contained HTML (printable to PDF), plain text (no markers at all; readable in any terminal), a ZIP bundle (`transcript.md` + `transcript.html` + `transcript.txt` + `assets/` + `meta.json`), and a **JSONL session log** — the raw event stream, replayable.
-- **Real import, not a mock** — `/import-session <file>` turns a JSONL log (or a Markdown transcript) back into an actual Session: the host validates it through `sessions.create({ seed })`, it is written through `sessionPersistence`, and `workspace.attachSession` puts it in the sidebar. You can keep talking in it afterwards.
+- **Real import, not a mock** — `/import-session <file>` turns a JSONL log, a Chatbox export (HTML or JSON), a DeepSeek chat export (ZIP), or a transcript (including hand-written `user:` / `assistant:` / `thinking:` lines) back into an actual Session: the host validates it through `sessions.create({ seed })`, it is written through `sessionPersistence`, and `workspace.attachSession` puts it in the sidebar. You can keep talking in it afterwards.
+- **Write a dialogue by hand** — the dialog's third tab: author user and model messages (only the model's carry reasoning), name it, pick a workspace, and create a real session in one click. Boxes with an empty body are skipped.
 - **Complete content** — user and assistant messages, foldable reasoning blocks, foldable tool calls and results with truncation markers, code fences that cannot be broken by the body, image attachments, timestamps, and the Session title, models, and usage.
 - **One tool call is one line.** Arguments and result share a single collapsed disclosure, so what you read by default is who said what and when; open a call only when you need it.
 - **Questions get their own card.** `ask_user_question` no longer renders as raw JSON: it becomes a "提问 · 2/2 已回答" card with the question text, every option, and the one you actually picked (highlighted, marked `✓ 已选`). It opens by default — a question you answered is conversation, not tool plumbing. Questions asked **from inside a `run_code` program** are recognised too: the object literal is read out of the code, and the answers are found by shape (`{ id, selected }`) wherever the program returned them.
@@ -355,20 +423,31 @@ Click "导出文字稿" (Export transcript) in the Session header, or type:
 /export-md zip --with-log            # bundle carries log.jsonl too
 ```
 
-Flags: `--thinking`, `--no-tools`, `--system`, `--injected`, `--timestamps`, `--no-usage`, `--surface`, `--images=auto|embed|assets|none`, `--limit=N`, `--with-log`, `--save[=dir]`.
+Flags: `--thinking`, `--no-tools`, `--system`, `--injected`, `--timestamps`, `--no-usage`, `--no-subagents`, `--surface`, `--images=auto|embed|assets|none`, `--limit=N`, `--with-log`, `--save[=dir]`.
 
 ### Import
 
 ```
 /import-session /tmp/exports/dsh-chat-xxx.jsonl         # import it
 /import-session /tmp/exports/dsh-chat-xxx.jsonl --dry   # show the plan, write nothing
-/import-session /tmp/exports/dsh-chat-xxx.md            # Markdown works too (text only)
+/import-session /tmp/exports/dsh-chat-xxx.md            # Markdown or plain text works too
+/import-session ./chatbox-export.html                   # a Chatbox HTML export
+/import-session ./chatbox-backup.json                   # a Chatbox JSON backup
+/import-session ./deepseek_data-2026.zip                # a DeepSeek chat export
 /import-session ./log.jsonl --cwd=/Users/me/project     # choose the working directory
 ```
 
 The import drops machine-local records (`subagent/descriptor`, `request/header`, `tool/ptc-dispatch*`, `compaction/*`, …), renumbers the surviving events contiguously from seq 0 — the host requires that of a seed — and rewrites the seq references those events carry. Message-producing events also get the `surfaceOp: 'append'` marker the store demands. Then it seeds the Session, writes it through a persistence handle, and attaches it to the workspace that owns its directory.
 
 A JSONL log keeps the conversation, reasoning, tool calls and results, usage, and timestamps. A Markdown transcript keeps only user/assistant text; tool calls, reasoning, images, and real times are gone. Images are not copied by a JSONL-only import: their attachment references survive, so they usually resolve on the same machine and show as missing elsewhere. A ZIP import writes its `assets/` back into the attachment store and relinks the references, so images survive a move to another machine.
+
+### Writing a dialogue by hand
+
+The dialog's third tab authors a conversation without a file in between: one card per message, yours on the left and the model's on the right, each with a body box and — on the model's side only, above the body — a reasoning box, all reorderable and removable, with three buttons below — add a user message, add a model message, or add a whole round at once. Give it a title, pick a workspace (the ones this profile knows, or a path you type), and create it — the session lands exactly where an import would. Cards with an empty body are skipped, so leftover blank boxes change nothing.
+
+The routes are `POST /api/dsh-chat-export.compose` (`{ messages: [{ role, text, reasoning }], title?, cwd? }`) and `GET /api/dsh-chat-export.workspaces`.
+
+**On presets**: neither an import nor a composed session carries `agentPreset`. The original preset may name one this profile does not have, and seeding an unknown name makes the host reject the session. Both land on the profile's default preset; you can switch afterwards.
 
 ### How it works
 
@@ -377,7 +456,11 @@ Everything is read through the official services (`sessionPersistence`, `session
 ### Known limitations
 
 - **Saving to a directory supports Markdown and HTML only**; the host's `ctx.fs` has no binary write, and bypassing it with `node:fs` would ignore the Session sandbox. Download the ZIP instead.
-- **Sub-Session (subagent) export is not included** in v0.1.0.
+- **Transcript import is lossy.** A Markdown, plain-text, or Chatbox export rebuilds only the user and assistant text (plus a `thinking:` chain when one is written); tool calls and images cannot come back, and every timestamp becomes the import time. A Chatbox HTML export keeps code blocks as plain text only. Use the `log` format for a lossless round trip.
+- **Sub-sessions are an appendix, not inline.** A subagent's conversation is appended at the end of the document rather than placed beside the tool call that spawned it: the parent log records the call, not the child's id, so any alignment would be a guess.
+- **Sub-sessions reach Markdown, HTML, and ZIP only.** A JSONL log stays single-session — rebuilding the parent/child link on import is a separate problem, and mixing it in would only make `planImport` guess.
+- **Only `origin: 'subagent'` counts.** A fork also carries `parentSession`, but it is a conversation of its own; folding it in would duplicate somebody else's session.
+- **Capped at 50.** Grandchildren are walked too, and the walk stops at the cap so one export cannot drag in an entire tree.
 - **PDF is produced by the browser's print dialog**, not generated by the plugin.
 - **Usage is token counts only** — the Session log carries no cost field.
 - Message text is **not** Markdown-escaped (it is the conversation itself); the HTML renderer escapes before adding its own markup, so a Session cannot inject HTML into an export.

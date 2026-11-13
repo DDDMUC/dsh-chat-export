@@ -25,6 +25,8 @@ window.__ModuleLoader__.load({
     const NS = 'dsh-chat-export'
     const API = '/api/dsh-chat-export'
     const HEADER_SLOT = 'conversation.session.header.utilities'
+    /** Sentinel value in the workspace picker: type the path by hand instead. */
+    const CUSTOM_CWD = '__custom__'
 
     // --- copy -----------------------------------------------------------------
 
@@ -63,6 +65,7 @@ window.__ModuleLoader__.load({
       'content.injected': '注入内容',
       'content.timestamps': '时间戳',
       'content.usage': '用量统计',
+      'content.subagents': '子会话',
       'field.output': '输出',
       'output.download': '浏览器下载',
       'output.save': '保存到目录',
@@ -85,7 +88,7 @@ window.__ModuleLoader__.load({
       'tab.export': '导出',
       'tab.import': '导入',
       'import.dialog.title': '导入会话',
-      'import.dialog.description': '把导出的会话日志（JSONL）、ZIP 包或文字稿（Markdown）变回一个能继续聊的真实会话。ZIP 会顺带把图片写回附件库。导入只新建会话，不改动原文件。',
+      'import.dialog.description': '把会话日志（JSONL）、ZIP 包、文字稿（Markdown / 纯文本）、Chatbox 导出（HTML / JSON）或 DeepSeek 官网导出（deepseek_data-*.zip）变回一个能继续聊的真实会话。文字稿支持 `用户：` / `助手：` / `思维：` 这类手写格式。导入只新建会话，不改动原文件。',
       'import.field.source': '来源',
       'import.chooseFile': '选择文件',
       'import.noFile': '尚未选择文件',
@@ -108,6 +111,32 @@ window.__ModuleLoader__.load({
       'import.dropzone': '拖拽文件到这里，或点击选择',
       'import.dropzone.hint': '支持 .zip（含图片写回）/ .jsonl / .md',
       'import.dropzone.replace': '点击或拖拽可替换',
+      'tab.compose': '新建',
+      'compose.dialog.title': '新建对话',
+      'compose.dialog.description': '自己写一段对话，直接建成一个能继续聊的真实会话。用户说的靠左、模型说的靠右；只有模型的消息有思维框，人的话没有思维链。',
+      'compose.title.label': '标题',
+      'compose.title.placeholder': '留空则叫「新建的会话」',
+      'compose.cwd.label': '工作区',
+      'compose.cwd.default': '默认（当前会话的目录）',
+      'compose.cwd.custom': '自定义路径…',
+      'compose.cwd.placeholder': '/绝对路径',
+      'compose.user': '用户',
+      'compose.assistant': '模型',
+      'compose.cot': '思维（可留空）',
+      'compose.cot.placeholder': '这条回答之前的思考过程…',
+      'compose.text': '正文',
+      'compose.text.placeholder': '写下这条消息的内容…',
+      'compose.addUser': '＋ 用户',
+      'compose.addAssistant': '＋ 模型',
+      'compose.addRound': '＋ 一轮',
+      'compose.moveUp': '上移',
+      'compose.moveDown': '下移',
+      'compose.remove': '删除',
+      'compose.create': '创建为新对话',
+      'compose.creating': '创建中…',
+      'compose.empty': '还没有写任何正文，先填一条消息。',
+      'notice.composed': '已创建会话：{title}（{count} 条消息）',
+      'error.compose': '创建失败：{message}',
       'import.dropzone.active': '松开即可导入',
       'import.dropzone.active.hint': '文件只在本地读取，不会上传',
     }
@@ -147,6 +176,7 @@ window.__ModuleLoader__.load({
       'content.injected': 'Injected context',
       'content.timestamps': 'Timestamps',
       'content.usage': 'Usage',
+      'content.subagents': 'Sub-sessions',
       'field.output': 'Output',
       'output.download': 'Download',
       'output.save': 'Save to a directory',
@@ -169,7 +199,7 @@ window.__ModuleLoader__.load({
       'tab.export': 'Export',
       'tab.import': 'Import',
       'import.dialog.title': 'Import a session',
-      'import.dialog.description': 'Turn an exported session log (JSONL), a ZIP bundle, or a transcript (Markdown) back into a real, continuable session. A ZIP also writes its images back into the attachment store. Import only creates a new session; it never modifies the file.',
+      'import.dialog.description': 'Turn a session log (JSONL), a ZIP bundle, a transcript (Markdown or plain text), a Chatbox export (HTML / JSON), or a DeepSeek chat export (deepseek_data-*.zip) back into a real, continuable session. Hand-written transcripts may use `user:` / `assistant:` / `thinking:` labels. A ZIP also writes its images back into the attachment store. Import only creates a new session; it never modifies the file.',
       'import.field.source': 'Source',
       'import.chooseFile': 'Choose file',
       'import.noFile': 'No file chosen',
@@ -194,6 +224,32 @@ window.__ModuleLoader__.load({
       'import.dropzone.replace': 'click or drop to replace',
       'import.dropzone.active': 'Release to import',
       'import.dropzone.active.hint': 'The file is read locally; nothing is uploaded',
+      'tab.compose': 'New',
+      'compose.dialog.title': 'New dialogue',
+      'compose.dialog.description': 'Write a conversation yourself and turn it into a real, continuable session. Yours sits on the left, the model\'s on the right; only the model\'s messages carry reasoning.',
+      'compose.title.label': 'Title',
+      'compose.title.placeholder': 'Leave empty to call it "新建的会话"',
+      'compose.cwd.label': 'Workspace',
+      'compose.cwd.default': 'Default (this session\'s directory)',
+      'compose.cwd.custom': 'Custom path…',
+      'compose.cwd.placeholder': '/absolute/path',
+      'compose.user': 'You',
+      'compose.assistant': 'Model',
+      'compose.cot': 'Reasoning (optional)',
+      'compose.cot.placeholder': 'What this answer was thinking before it spoke…',
+      'compose.text': 'Body',
+      'compose.text.placeholder': 'Write this message…',
+      'compose.addUser': '+ You',
+      'compose.addAssistant': '+ Model',
+      'compose.addRound': '+ Turn',
+      'compose.moveUp': 'Move up',
+      'compose.moveDown': 'Move down',
+      'compose.remove': 'Remove',
+      'compose.create': 'Create as a new conversation',
+      'compose.creating': 'Creating…',
+      'compose.empty': 'Nothing written yet — fill in at least one message.',
+      'notice.composed': 'Session created: {title} ({count} messages)',
+      'error.compose': 'Could not create it: {message}',
     }
 
     // --- style ----------------------------------------------------------------
@@ -256,6 +312,34 @@ window.__ModuleLoader__.load({
       '.dshce-file-input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}',
       '.dshce-field-label{display:block;margin:14px 0 0;font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary,inherit)}',
       '.dshce-warnings{margin:8px 0 0;padding-left:18px;font-size:12px;line-height:20px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      // The composer: one card per message, the human's on the left and the
+      // model's on the right, so the shape of the dialogue is visible while
+      // writing it.
+      '.dshce-select{display:block;width:100%;margin-top:8px;box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.25));border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:13px}',
+      '.dshce-comp-meta{display:flex;gap:10px;align-items:flex-end;margin:0 0 12px}',
+      '.dshce-comp-meta-field{display:block;min-width:0}',
+      '.dshce-comp-meta-field.is-title{flex:1 1 auto}',
+      '.dshce-comp-meta-field.is-workspace{flex:0 1 42%}',
+      '.dshce-comp-meta-label{display:block;margin:0 0 4px;font-size:11px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      '.dshce-comp-meta .dshce-input,.dshce-comp-meta .dshce-select{margin-top:0}',
+      '.dshce-comp-meta-extra{margin:0 0 12px}',
+      '.dshce-comp-list{display:flex;flex-direction:column;gap:10px;margin:0 0 12px}',
+      '.dshce-comp-card{border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.22));border-radius:10px;padding:10px 12px}',
+      '.dshce-comp-card.is-user{margin-right:34px;background:var(--dsw-alias-bg-secondary,rgba(127,127,127,.05))}',
+      '.dshce-comp-card.is-model{margin-left:34px}',
+      '.dshce-comp-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px}',
+      '.dshce-comp-role{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,inherit)}',
+      '.dshce-comp-card.is-model .dshce-comp-role{color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      '.dshce-comp-tools{display:flex;gap:2px}',
+      '.dshce-comp-tool{width:22px;height:22px;padding:0;border:0;border-radius:6px;background:none;color:var(--dsw-alias-label-tertiary,#8a8f98);font-size:13px;line-height:1;cursor:pointer}',
+      '.dshce-comp-tool:hover:not(:disabled){background:var(--dsw-alias-bg-secondary,rgba(127,127,127,.12));color:var(--dsw-alias-label-primary,inherit)}',
+      '.dshce-comp-tool:disabled{opacity:.3;cursor:default}',
+      '.dshce-comp-field{display:block;margin:0 0 8px}',
+      '.dshce-comp-field:last-child{margin-bottom:0}',
+      '.dshce-comp-label{display:block;margin:0 0 4px;font-size:11px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      '.dshce-comp-area{display:block;width:100%;box-sizing:border-box;resize:vertical;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.22));border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:13px;line-height:1.5}',
+      '.dshce-comp-area.is-cot{background:var(--dsw-alias-bg-secondary,rgba(127,127,127,.05));font-size:12.5px;color:var(--dsw-alias-label-secondary,#5c6068)}',
+      '.dshce-comp-add{display:flex;gap:8px;margin:0 0 6px}',
       // The dialog is a dense form (two-column switches plus a preview), and the
       // primitive's default box is narrow. `Modal` forwards `className` to the
       // dialog element, so this is ours to size. Eight handles make it behave
@@ -316,6 +400,8 @@ window.__ModuleLoader__.load({
         injected: false,
         timestamps: false,
         usage: false,
+        // Mirrors the host default: subagent conversations are part of the work.
+        subagents: true,
         scope: 'full',
         images: 'auto',
         toolResultLimit: 4000,
@@ -409,7 +495,22 @@ window.__ModuleLoader__.load({
         impError: null,
         impDragging: false,
         impSize: 0,
+        // Compose tab state: a dialogue the user writes by hand.
+        compTitle: '',
+        compCwd: '',
+        compCustomCwd: '',
+        compMessages: [blankMessage('user'), blankMessage('assistant')],
+        compBusy: false,
+        compError: null,
+        compResult: null,
+        workspaces: [],
+        workspacesLoaded: false,
       }
+    }
+
+    /** One empty message box for the composer. */
+    function blankMessage(role) {
+      return { role: role === 'assistant' ? 'assistant' : 'user', text: '', reasoning: '' }
     }
 
     /** Format one localized string with `{name}` parameters. */
@@ -641,6 +742,111 @@ window.__ModuleLoader__.load({
         this.patch(sessionId, { [key]: value, impPreview: null, impError: null })
       }
 
+      // --- composing a dialogue ------------------------------------------------
+
+      /** Set one composer field (title or working directory). */
+      setComposeField(sessionId, key, value) {
+        this.patch(sessionId, { [key]: value, compError: null, compResult: null })
+      }
+
+      /** Edit one authored message. */
+      setComposeMessage(sessionId, index, patch) {
+        const entry = this.entryOf(sessionId)
+        const messages = (entry.compMessages ?? []).map((message, at) => (at === index ? { ...message, ...patch } : message))
+        this.patch(sessionId, { compMessages: messages, compError: null, compResult: null })
+      }
+
+      /** Append one empty message box. */
+      addComposeMessage(sessionId, role) {
+        const entry = this.entryOf(sessionId)
+        this.patch(sessionId, {
+          compMessages: [...(entry.compMessages ?? []), blankMessage(role)],
+          compError: null,
+          compResult: null,
+        })
+      }
+
+      /** Append a whole round: one user message and the model's answer. */
+      addComposeRound(sessionId) {
+        const entry = this.entryOf(sessionId)
+        this.patch(sessionId, {
+          compMessages: [...(entry.compMessages ?? []), blankMessage('user'), blankMessage('assistant')],
+          compError: null,
+          compResult: null,
+        })
+      }
+
+      /** Drop one message box. */
+      removeComposeMessage(sessionId, index) {
+        const entry = this.entryOf(sessionId)
+        this.patch(sessionId, {
+          compMessages: (entry.compMessages ?? []).filter((_message, at) => at !== index),
+          compError: null,
+          compResult: null,
+        })
+      }
+
+      /** Move one message box up (-1) or down (+1). */
+      moveComposeMessage(sessionId, index, delta) {
+        const entry = this.entryOf(sessionId)
+        const messages = [...(entry.compMessages ?? [])]
+        const target = index + delta
+        if (target < 0 || target >= messages.length) return
+        const [moved] = messages.splice(index, 1)
+        messages.splice(target, 0, moved)
+        this.patch(sessionId, { compMessages: messages, compError: null, compResult: null })
+      }
+
+      /** Load the workspace list once, for the composer's picker. */
+      async loadWorkspaces(sessionId) {
+        // The tab calls this while rendering, so the flag has to be set even
+        // when the request fails - otherwise a failed load would re-render and
+        // ask again forever.
+        if (this.entryOf(sessionId).workspacesLoaded === true) return
+        this.patch(sessionId, { workspacesLoaded: true })
+        try {
+          const response = await this.fetcher(`${API}.workspaces`)
+          if (!response.ok) return
+          const result = await response.json()
+          this.patch(sessionId, { workspaces: Array.isArray(result.workspaces) ? result.workspaces : [] })
+        } catch {
+          // The picker stays empty; the custom path field still works.
+        }
+      }
+
+      /** Create a session out of the authored messages. */
+      async runCompose(sessionId) {
+        const entry = this.entryOf(sessionId)
+        const messages = (entry.compMessages ?? []).filter((message) => (message.text ?? '').trim() !== '')
+        if (messages.length === 0) {
+          this.patch(sessionId, { compError: 'compose.empty' })
+          return
+        }
+        const custom = entry.compCwd === CUSTOM_CWD
+        const cwd = custom ? (entry.compCustomCwd ?? '').trim() : (entry.compCwd ?? '')
+        this.patch(sessionId, { compBusy: true, compError: null, compResult: null })
+        try {
+          const response = await this.fetcher(`${API}.compose`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              messages,
+              title: entry.compTitle === '' ? undefined : entry.compTitle,
+              cwd: cwd === '' ? undefined : cwd,
+            }),
+          })
+          if (!response.ok) throw new Error(await failureText(response))
+          const result = await response.json()
+          this.patch(sessionId, {
+            compBusy: false,
+            compResult: result,
+            notice: { kind: 'composed', title: result.title ?? '', count: result.messages ?? 0 },
+          })
+        } catch (error) {
+          this.patch(sessionId, { compBusy: false, compError: messageOf(error) })
+        }
+      }
+
       /** Dry-run or perform the import through the host route. */
       async runImport(sessionId, dryRun) {
         const entry = this.entryOf(sessionId)
@@ -786,6 +992,7 @@ window.__ModuleLoader__.load({
         children: [
           { value: 'export', label: 'tab.export' },
           { value: 'import', label: 'tab.import' },
+          { value: 'compose', label: 'tab.compose' },
         ].map((choice) =>
           jsx(primitives.Pill, {
             key: choice.value,
@@ -871,6 +1078,7 @@ window.__ModuleLoader__.load({
                   jsx(SwitchRow, { t, labelKey: 'content.injected', checked: form.injected, onChange: (v) => set('injected', v) }),
                   jsx(SwitchRow, { t, labelKey: 'content.timestamps', checked: form.timestamps, onChange: (v) => set('timestamps', v) }),
                   jsx(SwitchRow, { t, labelKey: 'content.usage', checked: form.usage, onChange: (v) => set('usage', v) }),
+                  jsx(SwitchRow, { t, labelKey: 'content.subagents', checked: form.subagents !== false, onChange: (v) => set('subagents', v) }),
                 ],
               }),
             ],
@@ -990,7 +1198,7 @@ window.__ModuleLoader__.load({
                     jsx('input', {
                       type: 'file',
                       className: 'dshce-file-input',
-                      accept: '.jsonl,.json,.md,.markdown,.txt,.zip,text/plain,application/json,application/zip',
+                      accept: '.jsonl,.json,.md,.markdown,.txt,.html,.htm,.zip,text/plain,text/html,application/json,application/zip',
                       onChange: (event) => {
                         controller.chooseImportFile(sessionId, event.target.files?.[0])
                         // Reset so choosing the same file again still fires.
@@ -1271,27 +1479,215 @@ window.__ModuleLoader__.load({
       })
     }
 
+    /** One authored message: role, its reasoning, and its body. */
+    function ComposeCard({ sessionId, index, message, total, controller, t }) {
+      const isUser = message.role !== 'assistant'
+      const set = (patch) => controller.setComposeMessage(sessionId, index, patch)
+      const tool = (label, glyph, disabled, onClick) =>
+        jsx('button', {
+          type: 'button',
+          className: 'dshce-comp-tool',
+          title: t(label),
+          'aria-label': t(label),
+          disabled,
+          onClick,
+          children: glyph,
+        })
+      return jsxs('div', {
+        className: `dshce-comp-card ${isUser ? 'is-user' : 'is-model'}`,
+        children: [
+          jsxs('div', {
+            className: 'dshce-comp-head',
+            children: [
+              jsx('span', { className: 'dshce-comp-role', children: t(isUser ? 'compose.user' : 'compose.assistant') }),
+              jsxs('span', {
+                className: 'dshce-comp-tools',
+                children: [
+                  tool('compose.moveUp', '↑', index === 0, () => controller.moveComposeMessage(sessionId, index, -1)),
+                  tool('compose.moveDown', '↓', index === total - 1, () => controller.moveComposeMessage(sessionId, index, 1)),
+                  tool('compose.remove', '×', false, () => controller.removeComposeMessage(sessionId, index)),
+                ],
+              }),
+            ],
+          }),
+          // Reasoning first: it happens before the answer, and that is the
+          // order the transcript shows it in too.
+          isUser
+            ? null
+            : jsxs('label', {
+                className: 'dshce-comp-field',
+                children: [
+                  jsx('span', { className: 'dshce-comp-label', children: t('compose.cot') }),
+                  jsx('textarea', {
+                    className: 'dshce-comp-area is-cot',
+                    rows: 2,
+                    value: message.reasoning,
+                    placeholder: t('compose.cot.placeholder'),
+                    onChange: (event) => set({ reasoning: event.target.value }),
+                  }),
+                ],
+              }),
+          jsxs('label', {
+            className: 'dshce-comp-field',
+            children: [
+              jsx('span', { className: 'dshce-comp-label', children: t('compose.text') }),
+              jsx('textarea', {
+                className: 'dshce-comp-area',
+                rows: 3,
+                value: message.text,
+                placeholder: t('compose.text.placeholder'),
+                onChange: (event) => set({ text: event.target.value }),
+              }),
+            ],
+          }),
+        ],
+      })
+    }
+
+    /** The composer tab: write a dialogue, name it, choose where it lands. */
+    function ComposeBody({ sessionId, entry, controller, t }) {
+      if (entry.workspacesLoaded !== true) controller.loadWorkspaces(sessionId)
+      const messages = entry.compMessages ?? []
+      const workspaces = entry.workspaces ?? []
+      const custom = entry.compCwd === CUSTOM_CWD
+      const error = entry.compError
+      const errorText =
+        error === null || error === undefined
+          ? ''
+          : t(error) === error
+            ? format(t('error.compose'), { message: error })
+            : t(error)
+      return jsxs(Fragment, {
+        children: [
+          // Title and workspace share one row: two stacked full-width fields
+          // pushed the first message card below the fold for no benefit.
+          jsxs('div', {
+            className: 'dshce-comp-meta',
+            children: [
+              jsxs('label', {
+                className: 'dshce-comp-meta-field is-title',
+                children: [
+                  jsx('span', { className: 'dshce-comp-meta-label', children: t('compose.title.label') }),
+                  jsx(primitives.Input, {
+                    className: 'dshce-input',
+                    value: entry.compTitle,
+                    placeholder: t('compose.title.placeholder'),
+                    onChange: (event) => controller.setComposeField(sessionId, 'compTitle', event.target.value),
+                  }),
+                ],
+              }),
+              jsxs('label', {
+                className: 'dshce-comp-meta-field is-workspace',
+                children: [
+                  jsx('span', { className: 'dshce-comp-meta-label', children: t('compose.cwd.label') }),
+                  jsx('select', {
+                    className: 'dshce-select',
+                    value: entry.compCwd,
+                    onChange: (event) => controller.setComposeField(sessionId, 'compCwd', event.target.value),
+                    children: [
+                      jsx('option', { value: '', children: t('compose.cwd.default') }),
+                      ...workspaces.map((workspace) =>
+                        jsx('option', { value: workspace.path, children: workspace.title ?? workspace.path }),
+                      ),
+                      jsx('option', { value: CUSTOM_CWD, children: t('compose.cwd.custom') }),
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          }),
+          custom
+            ? jsx(primitives.Input, {
+                className: 'dshce-input dshce-comp-meta-extra',
+                value: entry.compCustomCwd,
+                placeholder: t('compose.cwd.placeholder'),
+                onChange: (event) => controller.setComposeField(sessionId, 'compCustomCwd', event.target.value),
+              })
+            : null,
+          jsx('div', {
+            className: 'dshce-comp-list',
+            children: messages.map((message, index) =>
+              jsx(ComposeCard, { sessionId, index, message, total: messages.length, controller, t }),
+            ),
+          }),
+          jsxs('div', {
+            className: 'dshce-comp-add',
+            children: [
+              jsx(primitives.Button, {
+                variant: 'ghost',
+                size: 'sm',
+                onClick: () => controller.addComposeMessage(sessionId, 'user'),
+                children: t('compose.addUser'),
+              }),
+              jsx(primitives.Button, {
+                variant: 'ghost',
+                size: 'sm',
+                onClick: () => controller.addComposeMessage(sessionId, 'assistant'),
+                children: t('compose.addAssistant'),
+              }),
+              jsx(primitives.Button, {
+                variant: 'ghost',
+                size: 'sm',
+                onClick: () => controller.addComposeRound(sessionId),
+                children: t('compose.addRound'),
+              }),
+            ],
+          }),
+          errorText === '' ? null : jsx('p', { className: 'dshce-error', children: errorText }),
+        ],
+      })
+    }
+
+    /** The composer's footer: cancel, or create the session. */
+    function ComposeFooter({ sessionId, entry, controller, t }) {
+      const busy = entry.compBusy === true
+      const empty = (entry.compMessages ?? []).every((message) => (message.text ?? '').trim() === '')
+      return jsxs(Fragment, {
+        children: [
+          jsx(primitives.Button, {
+            variant: 'ghost',
+            size: 'md',
+            disabled: busy,
+            onClick: () => controller.close(sessionId),
+            children: t('action.cancel'),
+          }),
+          jsx(primitives.Button, {
+            variant: 'primary',
+            size: 'md',
+            disabled: busy || empty,
+            onClick: () => controller.runCompose(sessionId),
+            children: busy ? t('compose.creating') : t('compose.create'),
+          }),
+        ],
+      })
+    }
+
     /** The one dialog behind the header button: export and import tabs. */
     function ExportDialog({ sessionId, entry, controller, t }) {
       if (!entry.open) return null
       const tab = entry.tab ?? 'export'
       const isImport = tab === 'import'
+      const isCompose = tab === 'compose'
+      const Body = isCompose ? ComposeBody : isImport ? ImportBody : ExportBody
+      const Footer = isCompose ? ComposeFooter : isImport ? ImportFooter : ExportFooter
+      const titleKey = isCompose ? 'compose.dialog.title' : isImport ? 'import.dialog.title' : 'dialog.title'
+      const descriptionKey = isCompose
+        ? 'compose.dialog.description'
+        : isImport
+          ? 'import.dialog.description'
+          : 'dialog.description'
       return jsx(primitives.Modal, {
         open: true,
         className: 'dshce-modal',
-        title: t(isImport ? 'import.dialog.title' : 'dialog.title'),
-        description: t(isImport ? 'import.dialog.description' : 'dialog.description'),
+        title: t(titleKey),
+        description: t(descriptionKey),
         closeLabel: t('action.cancel'),
         onClose: () => controller.close(sessionId),
-        footer: isImport
-          ? jsx(ImportFooter, { sessionId, entry, controller, t })
-          : jsx(ExportFooter, { sessionId, entry, controller, t }),
+        footer: jsx(Footer, { sessionId, entry, controller, t }),
         children: jsxs(Fragment, {
           children: [
             jsx(TabRow, { tab, onChange: (value) => controller.setTab(sessionId, value), t }),
-            isImport
-              ? jsx(ImportBody, { sessionId, entry, controller, t })
-              : jsx(ExportBody, { sessionId, entry, controller, t }),
+            jsx(Body, { sessionId, entry, controller, t }),
             jsx(ResizeHandles, {}),
           ],
         }),
@@ -1344,7 +1740,9 @@ window.__ModuleLoader__.load({
                     ? format(t('notice.saved'), { path: notice.path })
                     : notice.kind === 'imported'
                       ? format(t('notice.imported'), { title: notice.title ?? '', count: notice.count ?? 0 })
-                      : format(t('notice.downloaded'), { name: notice.name }),
+                      : notice.kind === 'composed'
+                        ? format(t('notice.composed'), { title: notice.title ?? '', count: notice.count ?? 0 })
+                        : format(t('notice.downloaded'), { name: notice.name }),
                 onDone: () => controller.clearNotice(sessionId),
               }),
         ],
