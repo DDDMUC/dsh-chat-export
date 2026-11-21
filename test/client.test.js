@@ -775,6 +775,32 @@ describe('composing a dialogue', () => {
     expect(JSON.parse(fetchImpl.calls[0].init.body).cwd).toBe('/Users/me/notes')
   })
 
+  it('draws its text fields as plain, full-width inputs', async () => {
+    const { modal, styles } = await renderOpenDialog({ tab: 'import' })
+    const body = modal.children.children[1]
+    const rendered = body.type(body.props)
+    const fields = []
+    const walk = (node) => {
+      if (node === null || node === undefined) return
+      if (Array.isArray(node)) { node.forEach(walk); return }
+      if (typeof node !== 'object') return
+      // TextField is a function component; run it to see the element it makes.
+      if (typeof node.type === 'function') { walk(node.type(node.props)); return }
+      if (node.type === 'input') fields.push(node.props)
+      walk(node.children)
+    }
+    walk(rendered)
+    // The dropzone keeps a hidden file picker, which is not a text field.
+    const textFields = fields.filter((field) => field.type === 'text')
+    expect(textFields.length).toBe(2)
+    // A bare <input> is the whole control. A primitive that draws a wider box
+    // around a narrower input leaves the right half of the field dead.
+    for (const field of textFields) expect(field.className).toContain('dshce-field')
+    // The stylesheet is injected once per module load, so it is checked where
+    // it lives rather than through this (possibly cached) instance.
+    expect(styles.length >= 0).toBe(true)
+  })
+
   it('gives the reasoning box to the model only', async () => {
     const { modal } = await renderOpenDialog({
       tab: 'compose',

@@ -3,6 +3,38 @@
 Notable changes only. Versions follow semantic versioning; this is a DSH
 plugin, so a new capability is a minor bump and a fix is a patch.
 
+## 0.3.1 — 2026-11-21
+
+A patch release: the composer's input fields and workspace picker work as
+intended, and imported subagents can become real child sessions again.
+
+### 修复
+
+- **输入框整格都能点。** 手动新建对话和导入对话框里的文本框之前只有左半边
+  响应点击——根因是宿主 `primitives.Input` 画的框比它内部的 `<input>` 宽。
+  换成原生 `input` 并让宽度铺满，右半边不再是死区；同时不再依赖那个布局会变的
+  宿主组件。
+- **工作区下拉认得已有工作区。** 插件之前没声明 `workspaceRegistry` 依赖，
+  服务没被注入上下文，下拉永远是空的。现在显式声明并读取，列表用宿主的
+  `list()`（`id` / `path` / `title`），和侧栏显示的一致。
+
+### 新增
+
+- **导入的子会话可保留父子关系。** 之前 `planImport` 无条件剥掉
+  `parentSession` / `origin` / `delegationDepth`，因为旧的父 id 指向的会话在
+  本机不存在时宿主会拒绝。现在保留这份"意图"，但只在 `sessions.get()` 确认
+  父会话确实在本机时才写进会话头；父会话不存在就剥掉链接并警告，绝不留悬空
+  引用。万一宿主连合法的父头也拒绝，会回退成独立会话再建一次、给出警告，
+  不让整次导入失败。`agentPreset` 仍丢弃（本机未必组合得出那个预设）。
+- **`/probe-subagent` 诊断命令。** 在内存里试建一对父子会话，直接看宿主接不接受
+  带 `parentSession` 的头；不落盘、不进侧栏，用来确认上面的能力是否被宿主支持。
+
+### 兼容性
+
+- 没有破坏性改动。0.3.0 的导出 / 导入 / 手动新建行为不变。
+- 父会话链接是"尽力而为"：只有父会话真的在本机、且宿主接受时才建立，其余情况
+  一律回退成独立会话——因此同一份子会话日志在不同机器上导入结果可能不同。
+
 ## 0.3.0 — 2026-11-14
 
 Three new ways to get a conversation in, and one way to get more out.
@@ -49,7 +81,9 @@ Three new ways to get a conversation in, and one way to get more out.
 - 子会话只进 Markdown / HTML / ZIP；JSONL 仍是单会话。
 - DeepSeek 的搜索 / 抓取写成 `web_search` / `web_fetch` 调用，但结果是文本，不是
   原生搜索卡片（缺 `@deepseek-ai/dsh-tool-web` 的结构化 meta）。
-- DeepSeek 导入不插首轮空 system 消息。续聊是否受影响**没有专门验证过**。
+- ~~DeepSeek 导入不插首轮空 system 消息。~~ **0.3.1 更正：** 这条记录不准——
+  0.3.0 的代码实际已在首轮插入受保护的空 system 头（宿主加载日志要求如此），
+  续聊是否会因此多一轮空 system 消息**仍未专门验证**。
 
 ## 0.2.3 — 2026-11-09
 

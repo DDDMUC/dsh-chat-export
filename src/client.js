@@ -299,6 +299,9 @@ window.__ModuleLoader__.load({
       '.dshce-switches{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px}',
       '.dshce-switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;color:var(--dsw-alias-label-secondary,#5c6068)}',
       '.dshce-input{display:block;width:100%;margin-top:8px;box-sizing:border-box}',
+      '.dshce-field{display:block;width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.25));border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:13px}',
+      '.dshce-field::placeholder{color:var(--dsw-alias-label-tertiary,#8a8f98)}',
+      '.dshce-field:focus{outline:none;border-color:var(--dsw-alias-state-primary,#4d6bfe);box-shadow:0 0 0 3px rgba(77,107,254,.15)}',
       '.dshce-preview{margin-top:10px;max-height:260px;overflow:auto;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.2));border-radius:8px;background:var(--dsw-alias-bg-secondary,rgba(127,127,127,.06));padding:10px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary,#5c6068)}',
       '.dshce-error{margin:12px 0 0;font-size:13px;line-height:20px;color:var(--dsw-alias-state-error-primary,#d54941)}',
       '.dshce-toast{position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:60;padding:8px 16px;border-radius:10px;background:var(--dsw-alias-bg-elevated,#222);color:var(--dsw-alias-label-primary,#fff);font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.24)}',
@@ -511,6 +514,25 @@ window.__ModuleLoader__.load({
     /** One empty message box for the composer. */
     function blankMessage(role) {
       return { role: role === 'assistant' ? 'assistant' : 'user', text: '', reasoning: '' }
+    }
+
+    /**
+     * A plain text field.
+     *
+     * Deliberately not `primitives.Input`: that component decides internally
+     * where its real <input> ends, and the box it draws is wider than the
+     * control inside it - so the right half of the field took no clicks. A bare
+     * element with `width:100%` is the whole control, and the plugin stops
+     * depending on a Harness client package whose layout can change.
+     */
+    function TextField({ value, placeholder, onChange, className }) {
+      return jsx('input', {
+        type: 'text',
+        className: className === undefined ? 'dshce-field' : `dshce-field ${className}`,
+        value: value ?? '',
+        placeholder,
+        onChange,
+      })
     }
 
     /** Format one localized string with `{name}` parameters. */
@@ -1097,7 +1119,7 @@ window.__ModuleLoader__.load({
                 ],
               }),
               entry.mode === 'save'
-                ? jsx(primitives.Input, {
+                ? jsx(TextField, {
                     className: 'dshce-input',
                     value: entry.directory,
                     placeholder: t('output.save.placeholder'),
@@ -1241,14 +1263,14 @@ window.__ModuleLoader__.load({
               children: [
                 jsx('p', { className: 'dshce-group-title', children: t('import.field.options') }),
                 jsx('span', { className: 'dshce-field-label', children: t('import.title.label') }),
-                jsx(primitives.Input, {
+                jsx(TextField, {
                   className: 'dshce-input',
                   value: entry.impTitle ?? '',
                   placeholder: t('import.title.placeholder'),
                   onChange: (event) => controller.setImportField(sessionId, 'impTitle', event.target.value),
                 }),
                 jsx('span', { className: 'dshce-field-label', children: t('import.cwd.label') }),
-                jsx(primitives.Input, {
+                jsx(TextField, {
                   className: 'dshce-input',
                   value: entry.impCwd ?? '',
                   placeholder: t('import.cwd.placeholder'),
@@ -1568,7 +1590,7 @@ window.__ModuleLoader__.load({
                 className: 'dshce-comp-meta-field is-title',
                 children: [
                   jsx('span', { className: 'dshce-comp-meta-label', children: t('compose.title.label') }),
-                  jsx(primitives.Input, {
+                  jsx(TextField, {
                     className: 'dshce-input',
                     value: entry.compTitle,
                     placeholder: t('compose.title.placeholder'),
@@ -1597,7 +1619,7 @@ window.__ModuleLoader__.load({
             ],
           }),
           custom
-            ? jsx(primitives.Input, {
+            ? jsx(TextField, {
                 className: 'dshce-input dshce-comp-meta-extra',
                 value: entry.compCustomCwd,
                 placeholder: t('compose.cwd.placeholder'),

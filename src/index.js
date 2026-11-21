@@ -30,7 +30,7 @@ import {
 import { produceExport, dataUri } from './export.js'
 import { exportServices, readFileBytes, readImageBytes, readSessionLog, readSessionTitle, writeTextFile } from './sources.js'
 import { parseLogArtifact } from './log.js'
-import { ImportError, createImportedSession, eventsFromDialogue, eventsFromMarkdown, importZipAssets, planImport, rewriteAttachmentRefs } from './import.js'
+import { ImportError, createImportedSession, eventsFromDialogue, eventsFromMarkdown, importZipAssets, newSessionId, planImport, rewriteAttachmentRefs } from './import.js'
 import { looksLikeChatboxJson } from './chatbox.js'
 import { loadSubagents } from './subagents.js'
 import { convertDeepseekSession, fileEntriesOf, looksLikeDeepseekExport, rankSessions, readDeepseekExport } from './deepseek.js'
@@ -40,7 +40,11 @@ import { readZip } from './zip.js'
 export const name = PLUGIN_ID
 
 /** Both services are required: without them the plugin has nothing to register. */
-export const inject = ['commands', 'connection']
+// `workspaceRegistry` is listed so the service is actually composed into this
+// plugin's context: without the declaration the lookup came back empty and the
+// composer's workspace picker had nothing to offer, while imports silently fell
+// back to "not attached".
+export const inject = ['commands', 'connection', 'workspaceRegistry']
 
 /** How long a command-parsed request stays available to the browser half. */
 const PENDING_TTL_MS = 5 * 60 * 1000
@@ -424,7 +428,7 @@ export async function runCompose(ctx, request) {
  * @returns `{ ok, workspaces: [{ id, path }] }`.
  */
 export function listWorkspaces(ctx) {
-  const registry = ctx.get('workspaceRegistry')
+  const registry = ctx.workspaceRegistry ?? ctx.get('workspaceRegistry')
   const all = registry !== undefined && typeof registry.list === 'function' ? registry.list() : []
   const workspaces = (Array.isArray(all) ? all : [])
     .map((workspace) => {
@@ -645,6 +649,59 @@ export async function runImportZip(ctx, request) {
   return { ok: true, dryRun: false, ...summary, attached: created.attached }
 }
 
+/**
+ * Probe whether a seeded session may name a parent.
+ *
+ * `planImport` strips `parentSession` because an earlier version of this plugin
+ * was told the host refuses a header pointing at a session that does not exist.
+ * Nobody checked whether it accepts one when the parent DOES exist, and that
+ * answer decides whether an imported subagent can be a real child session or
+ * only a flat sibling. Both sessions here are created in memory only: no
+ * persistence handle, no workspace attach, so nothing shows up in the sidebar.
+ *
+ * @param ctx - host context.
+ * @returns `{ parent, child }`, each `{ ok, id?, error? }`.
+ */
+export async function probeSubagentHeader(ctx) {
+  const sessions = ctx.get('sessions')
+  if (sessions === undefined || typeof sessions.create !== 'function') {
+    return { parent: { ok: false, error: 'no-sessions' }, child: { ok: false, error: 'no-sessions' } }
+  }
+  const seed = [{ type: 'turn/start', seq: 0, time: Date.now(), data: { turn: 1 } }]
+  const parentId = newSessionId()
+  let parent
+  try {
+    parent = sessions.create(parentId, { seed, meta: { createdAt: Date.now() } })
+  } catch (error) {
+    return {
+      parent: { ok: false, error: error instanceof Error ? error.message : String(error) },
+      child: { ok: false, error: 'skipped: the parent could not be created' },
+    }
+  }
+  const parentSessionId = parent?.header?.id ?? parentId
+  const childId = newSessionId()
+  try {
+    const child = sessions.create(childId, {
+      seed,
+      meta: {
+        createdAt: Date.now(),
+        parentSession: parentSessionId,
+        origin: 'subagent',
+        delegationDepth: 1,
+      },
+    })
+    return {
+      parent: { ok: true, id: parentSessionId },
+      child: { ok: true, id: child?.header?.id ?? childId, header: child?.header ?? null },
+    }
+  } catch (error) {
+    return {
+      parent: { ok: true, id: parentSessionId },
+      child: { ok: false, error: error instanceof Error ? error.message : String(error) },
+    }
+  }
+}
+
 /** Install the plugin. */
 export function apply(ctx, config = {}) {
   const settings = { ...DEFAULT_CONFIG, ...(config !== null && typeof config === 'object' ? config : {}) }
@@ -715,6 +772,25 @@ export function apply(ctx, config = {}) {
       }),
     'dsh-chat-export: import command',
   )
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
+        name: 'probe-subagent',
+        description: '诊断：宿主是否接受带 parentSession 的种子会话',
+        handler: async () => {
+          const result = await probeSubagentHeader(ctx)
+          const line = (label, entry) =>
+            `${label}: ${entry.ok ? `ok (${entry.id})` : `FAILED — ${entry.error}`}`
+          return {
+            kind: result.child.ok ? 'success' : 'error',
+            text: [line('parent', result.parent), line('child', result.child)].join('\n'),
+          }
+        },
+      }),
+    'dsh-chat-export: probe command',
+  )
+
 
   const connection = ctx.get('connection')
   if (connection === undefined || connection.fetch === undefined || typeof connection.fetch.register !== 'function') {

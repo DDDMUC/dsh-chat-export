@@ -1,7 +1,7 @@
 import { inflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { API_PREFIX } from '../src/options.js'
-import { apply, inject, name, runImportZip } from '../src/index.js'
+import { apply, inject, name, probeSubagentHeader, runImportZip } from '../src/index.js'
 import { buildZip } from '../src/zip.js'
 import { buildLogArtifact } from '../src/log.js'
 import { exportServices, mediaExtension, idVariants, readSessionLog, readSessionTitle, writeTextFile } from '../src/sources.js'
@@ -98,7 +98,7 @@ async function call(route, url, init = {}) {
 describe('plugin shape', () => {
   it('declares the name and the services it needs', () => {
     expect(name).toBe('dsh-chat-export')
-    expect(inject).toEqual(['commands', 'connection'])
+    expect(inject).toEqual(['commands', 'connection', 'workspaceRegistry'])
   })
 })
 
@@ -106,7 +106,7 @@ describe('apply', () => {
   it('registers the export and import commands and eight routes', () => {
     const { ctx, routes, commands } = stubContext()
     apply(ctx)
-    expect(commands.map((command) => command.name)).toEqual(['export-md', 'import-session'])
+    expect(commands.map((command) => command.name)).toEqual(['export-md', 'import-session', 'probe-subagent'])
     expect([...routes.keys()].sort()).toEqual([
       `${API_PREFIX}.compose`,
       `${API_PREFIX}.export`,
@@ -684,5 +684,51 @@ describe('import a ZIP bundle', () => {
   it('refuses a ZIP that carries no session log', async () => {
     const zip = buildZip([{ path: 'assets.json', data: '[]' }])
     await expect(runImportZip({ get: () => undefined }, { zip })).rejects.toThrow(/没有会话日志/u)
+  })
+})
+
+
+describe('probeSubagentHeader', () => {
+  /** A sessions service that accepts or refuses a parented header. */
+  function sessionsService(refuseParent) {
+    const created = []
+    return {
+      created,
+      get: (serviceName) =>
+        serviceName !== 'sessions'
+          ? undefined
+          : {
+              create: (id, options) => {
+                created.push({ id, options })
+                if (options.meta?.parentSession !== undefined && refuseParent) {
+                  throw new Error('the host refused a parented header')
+                }
+                return { header: { id, ...options.meta } }
+              },
+            },
+    }
+  }
+
+  it('reports both sessions when the host accepts a parent', async () => {
+    const ctx = sessionsService(false)
+    const result = await probeSubagentHeader(ctx)
+    expect(result.parent.ok).toBe(true)
+    expect(result.child.ok).toBe(true)
+    // The child must name the parent that was just created, not a made-up id.
+    expect(ctx.created[1].options.meta.parentSession).toBe(result.parent.id)
+    expect(ctx.created[1].options.meta.origin).toBe('subagent')
+  })
+
+  it('reports the refusal instead of throwing', async () => {
+    const result = await probeSubagentHeader(sessionsService(true))
+    expect(result.parent.ok).toBe(true)
+    expect(result.child.ok).toBe(false)
+    expect(result.child.error).toContain('refused')
+  })
+
+  it('reports a host with no sessions service', async () => {
+    const result = await probeSubagentHeader({ get: () => undefined })
+    expect(result.parent.ok).toBe(false)
+    expect(result.parent.error).toBe('no-sessions')
   })
 })

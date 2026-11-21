@@ -17,6 +17,45 @@
 import { randomUUID } from 'node:crypto'
 import { dialogueTurns, readChatbox } from './chatbox.js'
 import { SESSION_FORMAT_VERSION } from './log.js'
+import { idVariants } from './sources.js'
+
+/**
+ * The parent relationship a source log records, normalised into the pieces the
+ * host's session header understands. An empty object means the log was a root
+ * session, or that the recorded fields were malformed. Keeping this here (and
+ * not in the host call) leaves the planner pure and testable.
+ */
+function parentLinkOf(source) {
+  const parent = source?.parentSession
+  if (typeof parent !== 'string' || parent === '') return {}
+  const link = { parentSession: parent }
+  if (typeof source.origin === 'string' && source.origin !== '') link.origin = source.origin
+  if (source.delegationDepth !== undefined) {
+    const depth = Number(source.delegationDepth)
+    if (Number.isInteger(depth) && depth > 0) link.delegationDepth = depth
+  }
+  return link
+}
+
+/**
+ * Locate a parent that really exists in this profile, returning its canonical
+ * id. A raw id copied from another machine would leave a dangling link, so the
+ * caller drops the relationship when this returns undefined.
+ */
+function findLocalParent(sessions, parentId) {
+  if (sessions === undefined || typeof sessions.get !== 'function') return undefined
+  for (const variant of idVariants(parentId)) {
+    try {
+      const found = sessions.get(variant)
+      if (found === undefined || found === null) continue
+      const id = typeof found.header?.id === 'string' && found.header.id !== '' ? found.header.id : variant
+      return id
+    } catch {
+      // Try the other spelling of the same id before giving up.
+    }
+  }
+  return undefined
+}
 
 /**
  * Event types that name the machine, the parent, or a live process rather than
@@ -154,9 +193,12 @@ export function planImport(parsed, options = {}) {
     id: typeof options.id === 'string' && options.id !== '' ? options.id : newSessionId(),
     createdAt: now,
     ...cwd === undefined ? {} : { cwd },
-    // Deliberately absent: parentSession, origin, delegationDepth, agentPreset.
-    // They either point at a session that does not exist here or name a preset
-    // this profile may not compose, and the host refuses both.
+    // A subagent's link to its parent is kept as *intent* here. It is only
+    // honoured in createImportedSession, after checking the parent exists in
+    // this profile; a raw id from another machine must never dangle.
+    ...parentLinkOf(parsed.header),
+    // agentPreset is still dropped: this profile may not compose the preset a
+    // foreign session named, and there is no safe way to verify it here.
     isSeeded: false,
   }
 
@@ -538,17 +580,51 @@ export async function createImportedSession(ctx, plan, options = {}) {
   }
 
   const { header, events } = plan
+  const warnings = [...(plan.warnings ?? [])]
+
+  // Honour a recorded parent only when it resolves to a live session here.
+  // Otherwise strip the link so the new session opens as an ordinary root
+  // rather than referencing a parent that does not exist in this profile.
+  const plainMeta = {
+    createdAt: header.createdAt,
+    ...header.cwd === undefined ? {} : { cwd: header.cwd },
+  }
+  let meta = plainMeta
+  let linked = false
+  // Honour a recorded parent only when it resolves to a live session here.
+  // Otherwise strip the link so the new session opens as an ordinary root
+  // rather than referencing a parent that does not exist in this profile.
+  if (typeof header.parentSession === 'string' && header.parentSession !== '') {
+    const parentId = findLocalParent(sessions, header.parentSession)
+    if (parentId === undefined) {
+      warnings.push(`原会话是子会话，但父会话 ${header.parentSession} 不在本机，已作为独立会话导入`)
+    } else {
+      meta = { ...plainMeta, parentSession: parentId }
+      if (typeof header.origin === 'string' && header.origin !== '') meta.origin = header.origin
+      if (Number.isInteger(header.delegationDepth) && header.delegationDepth > 0) {
+        meta.delegationDepth = header.delegationDepth
+      }
+      linked = true
+    }
+  }
+
   let session
   try {
-    session = sessions.create(header.id, {
-      seed: events,
-      meta: {
-        createdAt: header.createdAt,
-        ...header.cwd === undefined ? {} : { cwd: header.cwd },
-      },
-    })
+    session = sessions.create(header.id, { seed: events, meta })
   } catch (error) {
-    throw new ImportError('rejected', `宿主拒绝了这份事件流：${error instanceof Error ? error.message : String(error)}`, 422)
+    // A host may refuse a parented header even when the parent is present. This
+    // is a capability probe in disguise: fall back to a root session rather
+    // than losing the import, and say plainly what happened.
+    if (linked) {
+      warnings.push(`宿主不接受子会话头（${error instanceof Error ? error.message : String(error)}），已作为独立会话导入`)
+      try {
+        session = sessions.create(header.id, { seed: events, meta: plainMeta })
+      } catch (second) {
+        throw new ImportError('rejected', `宿主拒绝了这份事件流：${second instanceof Error ? second.message : String(second)}`, 422)
+      }
+    } else {
+      throw new ImportError('rejected', `宿主拒绝了这份事件流：${error instanceof Error ? error.message : String(error)}`, 422)
+    }
   }
 
   const handle = await persistence.create(session.header, { inheritedEventCount: 0 })
@@ -558,7 +634,6 @@ export async function createImportedSession(ctx, plan, options = {}) {
     await handle.close()
   }
 
-  const warnings = [...(plan.warnings ?? [])]
   let attach = { attached: false }
   if (options.attach !== false) {
     attach = await attachToWorkspace(ctx, header)

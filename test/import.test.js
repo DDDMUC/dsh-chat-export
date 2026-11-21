@@ -69,15 +69,31 @@ describe('planImport', () => {
     expect(plan.events[2].type).toBe('user/message')
   })
 
-  it('builds a header that does not claim a parent, an origin, or a preset', () => {
+  it('builds a header with the parent link intent but no preset', () => {
     const plan = planImport(parsedOf(events), { id: 'session-new', cwd: '/tmp/here', now: 1000 })
     expect(plan.header).toEqual({
       version: 4,
       id: 'session-new',
       createdAt: 1000,
       cwd: '/tmp/here',
+      parentSession: 'session-99999999-9999-9999-9999-999999999999',
+      origin: 'subagent',
+      delegationDepth: 1,
       isSeeded: false,
     })
+    // agentPreset names a preset this profile may not compose; it is never kept.
+    expect(plan.header.agentPreset).toBeUndefined()
+  })
+
+  it('leaves a root session without a parent link', () => {
+    const root = { ...header }
+    delete root.parentSession
+    delete root.origin
+    delete root.delegationDepth
+    const plan = planImport(parsedOf(events, root), { id: 'session-new', now: 1000 })
+    expect(plan.header.parentSession).toBeUndefined()
+    expect(plan.header.origin).toBeUndefined()
+    expect(plan.header.delegationDepth).toBeUndefined()
   })
 
   it('keeps the original title when the caller does not supply one', () => {
@@ -369,6 +385,92 @@ describe('createImportedSession', () => {
       },
     }
     await expect(createImportedSession(ctx, plan)).rejects.toThrow(/宿主拒绝了这份事件流/u)
+  })
+
+  it('links a subagent to a parent that exists in this profile', async () => {
+    const parentId = 'session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    let seenMeta
+    const childPlan = {
+      ...plan,
+      header: {
+        ...plan.header,
+        parentSession: parentId,
+        origin: 'subagent',
+        delegationDepth: 2,
+      },
+    }
+    const ctx = {
+      get: (name) => {
+        if (name === 'sessions') {
+          return {
+            // The parent is registered under the bare spelling of its id.
+            get: (variant) => variant === parentId.slice('session-'.length) ? { header: { id: parentId } } : undefined,
+            create: (id, options) => { seenMeta = options.meta; return { header: { id }, snapshotEvents: () => [] } },
+          }
+        }
+        if (name === 'sessionPersistence') return { create: async () => ({ append: async () => {}, close: async () => {} }) }
+        return undefined
+      },
+    }
+    await createImportedSession(ctx, childPlan, { attach: false })
+    expect(seenMeta.parentSession).toBe(parentId)
+    expect(seenMeta.origin).toBe('subagent')
+    expect(seenMeta.delegationDepth).toBe(2)
+  })
+
+  it('falls back to a root session when the host rejects the parented header', async () => {
+    const parentId = 'session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const seenMetas = []
+    const childPlan = {
+      ...plan,
+      header: { ...plan.header, parentSession: parentId, origin: 'subagent', delegationDepth: 1 },
+    }
+    const ctx = {
+      get: (name) => {
+        if (name === 'sessions') {
+          return {
+            get: (variant) => variant === parentId ? { header: { id: parentId } } : undefined,
+            create: (id, options) => {
+              seenMetas.push(options.meta)
+              if (options.meta.parentSession !== undefined) throw new Error('parented header refused')
+              return { header: { id }, snapshotEvents: () => [] }
+            },
+          }
+        }
+        if (name === 'sessionPersistence') return { create: async () => ({ append: async () => {}, close: async () => {} }) }
+        return undefined
+      },
+    }
+    const result = await createImportedSession(ctx, childPlan, { attach: false })
+    expect(seenMetas).toHaveLength(2)
+    expect(seenMetas[0].parentSession).toBe(parentId)
+    expect(seenMetas[1].parentSession).toBeUndefined()
+    expect(result.warnings.join(' ')).toContain('宿主不接受子会话头')
+  })
+
+  it('drops the link and warns when the parent is not in this profile', async () => {
+    let seenMeta
+    const childPlan = {
+      ...plan,
+      header: { ...plan.header, parentSession: 'session-deadbeef', origin: 'subagent', delegationDepth: 1 },
+    }
+    const ctx = {
+      get: (name) => {
+        if (name === 'sessions') {
+          return {
+            get: () => undefined,
+            create: (id, options) => { seenMeta = options.meta; return { header: { id }, snapshotEvents: () => [] } },
+          }
+        }
+        if (name === 'sessionPersistence') return { create: async () => ({ append: async () => {}, close: async () => {} }) }
+        return undefined
+      },
+    }
+    const result = await createImportedSession(ctx, childPlan, { attach: false })
+    expect(seenMeta.parentSession).toBeUndefined()
+    expect(seenMeta.origin).toBeUndefined()
+    expect(seenMeta.delegationDepth).toBeUndefined()
+    expect(result.warnings.join(' ')).toContain('父会话')
   })
 })
 
