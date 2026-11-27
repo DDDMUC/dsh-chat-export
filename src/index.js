@@ -44,7 +44,9 @@ export const name = PLUGIN_ID
 // plugin's context: without the declaration the lookup came back empty and the
 // composer's workspace picker had nothing to offer, while imports silently fell
 // back to "not attached".
-export const inject = ['commands', 'connection', 'workspaceRegistry']
+// `sessions` and `sandboxPolicy` are needed by the save route: the write must
+// carry the calling session's own workspace boundary, not the app process cwd.
+export const inject = ['commands', 'connection', 'workspaceRegistry', 'sessions', 'sandboxPolicy']
 
 /** How long a command-parsed request stays available to the browser half. */
 const PENDING_TTL_MS = 5 * 60 * 1000
@@ -231,7 +233,8 @@ async function saveArtifact(ctx, services, resolved, artifact, log, config, sign
   const filename = exportFilename(artifact.format, artifact.transcript.meta.title, artifact.transcript.meta.createdAt)
   const path = `${directory.replace(/\/+$/u, '')}/${filename}`
   const text = artifact.buffer.toString('utf8')
-  const written = await writeTextFile(services, path, text, signal)
+  const sessionCwd = log.header !== undefined && typeof log.header.cwd === 'string' ? log.header.cwd : undefined
+  const written = await writeTextFile(services, path, text, signal, { sessionId: resolved.sessionId, cwd: sessionCwd })
   return { ok: true, path: written.path, operation: written.operation, bytes: Buffer.byteLength(text), format: artifact.format, filename }
 }
 

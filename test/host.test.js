@@ -4,7 +4,7 @@ import { API_PREFIX } from '../src/options.js'
 import { apply, inject, name, probeSubagentHeader, runImportZip } from '../src/index.js'
 import { buildZip } from '../src/zip.js'
 import { buildLogArtifact } from '../src/log.js'
-import { exportServices, mediaExtension, idVariants, readSessionLog, readSessionTitle, writeTextFile } from '../src/sources.js'
+import { exportServices, mediaExtension, idVariants, readSessionLog, readSessionTitle, writePolicyFor, writeTextFile } from '../src/sources.js'
 import { header, resetClock, sampleSession } from './fixtures/build.js'
 
 /**
@@ -98,7 +98,7 @@ async function call(route, url, init = {}) {
 describe('plugin shape', () => {
   it('declares the name and the services it needs', () => {
     expect(name).toBe('dsh-chat-export')
-    expect(inject).toEqual(['commands', 'connection', 'workspaceRegistry'])
+    expect(inject).toEqual(['commands', 'connection', 'workspaceRegistry', 'sessions', 'sandboxPolicy'])
   })
 })
 
@@ -386,6 +386,36 @@ describe('the .save route', () => {
     expect(written[0].content).toContain('# 标题来自 sessionQuery')
   })
 
+  it('carries the calling session policy into the host write', async () => {
+    resetClock()
+    const calls = []
+    const live = { id: sessionId, header: { cwd: '/tmp/example' } }
+    const policy = { mode: 'workspace-write', workspaceRoot: '/tmp/example' }
+    const { ctx, routes } = stubContext({
+      services: {
+        sessions: { get: (id) => (id === sessionId ? live : undefined) },
+        sandboxPolicy: { resolve: (request) => {
+          expect(request).toEqual({ session: live })
+          return policy
+        } },
+        fs: {
+          async resolve(path) { return { targetKey: `key:${path}`, displayPath: path } },
+          async stat() { return undefined },
+          async writeText(...args) { calls.push(args); return { operation: 'create', version: 'v1' } },
+        },
+      },
+    })
+    apply(ctx)
+    const response = await call(routes.get(`${API_PREFIX}.save`), '/x', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, directory: 'dsh-chat-exports', options: { format: 'md' } }),
+    })
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0].displayPath).toMatch(/^\/tmp\/example\/dsh-chat-exports\//u)
+    expect(calls[0][4]).toEqual(policy)
+  })
+
   it('refuses to save a ZIP, because ctx.fs cannot write binary', async () => {
     resetClock()
     const { ctx, routes } = stubContext()
@@ -578,6 +608,52 @@ describe('sources helpers', () => {
     }
     await writeTextFile({ fs }, '/tmp/x.md', 'body')
     expect(intents[0]).toEqual({ kind: 'replaceIfVersion', version: 'v9' })
+  })
+
+  it('resolves the write policy from the live session when available', () => {
+    const live = { id: 'session-abc', header: { cwd: '/work' } }
+    const requests = []
+    const policy = { mode: 'workspace-write', workspaceRoot: '/work' }
+    const services = {
+      sessions: { get: (id) => (id === 'abc' ? live : undefined) },
+      sandboxPolicy: { resolve: (request) => { requests.push(request); return policy } },
+    }
+    expect(writePolicyFor(services, { sessionId: 'session-abc', cwd: '/stored' })).toEqual(policy)
+    expect(requests).toEqual([{ session: live }])
+    expect(writePolicyFor({})).toBeUndefined()
+  })
+
+  it('falls back to the stored cwd when the session is not live', () => {
+    const requests = []
+    const services = {
+      sessions: { get: () => undefined },
+      sandboxPolicy: { resolve: (request) => { requests.push(request); return { mode: 'workspace-write' } } },
+    }
+    writePolicyFor(services, { sessionId: 'session-abc', cwd: '/stored' })
+    expect(requests[0]).toEqual({ session: { id: 'session-abc', header: { cwd: '/stored' } } })
+  })
+
+  it('passes the policy as the fifth writeText argument and explains denials', async () => {
+    const calls = []
+    const policy = { mode: 'workspace-write', workspaceRoot: '/work' }
+    const fs = {
+      async resolve(path) { return { targetKey: path, displayPath: path } },
+      async stat() { return undefined },
+      async writeText(...args) {
+        calls.push(args)
+        const error = new Error('file access denied under workspace-write mode')
+        error.code = 'FS_SANDBOX_DENIED'
+        throw error
+      },
+    }
+    const services = { fs, sandboxPolicy: { resolve: () => policy } }
+    await expect(writeTextFile(services, '/work/x.md', 'body', undefined, { sessionId: 's', cwd: '/work' }))
+      .rejects.toMatchObject({
+        code: 'FS_SANDBOX_DENIED',
+        message: expect.stringContaining('允许写入的根目录：/work'),
+      })
+    expect(calls[0][4]).toEqual(policy)
+    expect(calls[0][3]).toBeUndefined()
   })
 })
 

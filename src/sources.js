@@ -22,7 +22,7 @@
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decodeSessionArtifact } from './zstd.js'
 
@@ -44,6 +44,10 @@ export function exportServices(ctx) {
     query: ctx.get('sessionQuery'),
     attachments: ctx.get('attachments'),
     fs: ctx.get('fs'),
+    // The save path needs the live Session and the host's policy resolver so a
+    // write can carry the session's own workspace boundary (see writePolicyFor).
+    sessions: ctx.get('sessions'),
+    sandboxPolicy: ctx.get('sandboxPolicy'),
   }
 }
 
@@ -314,27 +318,96 @@ export async function readFileBytes(services, ref, signal) {
 }
 
 /**
+ * The per-call sandbox policy a text write must carry.
+ *
+ * `ctx.fs` is the sanctioned, sandbox-aware writer: without an explicit policy
+ * the host resolves one with NO session, whose workspace root is the app
+ * process cwd rather than the session's cwd. Under `workspace-write` that
+ * rejects every path inside the user's real workspace. The built-in write tool
+ * avoids this by passing `sandboxPolicy.resolve({ session })` to `fs.writeText`
+ * as its fifth argument; this plugin must do the same.
+ *
+ * A live Session is preferred. When only a stored log is available we hand the
+ * resolver a minimal stand-in carrying the log's cwd — the same boundary the
+ * real session header supplies. If no policy service exists (older host or a
+ * test stub) we return undefined, which preserves the host's default behaviour.
+ *
+ * @param services - the resolved service bundle.
+ * @param options - `{ sessionId, cwd }` describing the session that owns the write.
+ * @returns the policy for this one call, or undefined when unavailable.
+ */
+export function writePolicyFor(services, options = {}) {
+  const resolver = services?.sandboxPolicy
+  if (resolver === undefined || typeof resolver.resolve !== 'function') return undefined
+  const store = services.sessions
+  let session
+  if (store !== undefined && typeof store.get === 'function' && typeof options.sessionId === 'string') {
+    for (const variant of idVariants(options.sessionId)) {
+      const found = store.get(variant)
+      if (found !== undefined) {
+        session = found
+        break
+      }
+    }
+  }
+  if (session === undefined && typeof options.cwd === 'string' && options.cwd !== '') {
+    session = { id: options.sessionId, header: { cwd: options.cwd } }
+  }
+  try {
+    return resolver.resolve(session === undefined ? {} : { session })
+  } catch {
+    return undefined
+  }
+}
+
+/** Turn a host sandbox refusal into a message that names the allowed roots. */
+function sandboxDenial(error, policy) {
+  if (error === null || typeof error !== 'object' || error.code !== 'FS_SANDBOX_DENIED') return undefined
+  const roots = []
+  if (typeof policy?.workspaceRoot === 'string' && policy.workspaceRoot !== '') roots.push(policy.workspaceRoot)
+  roots.push(tmpdir())
+  if (process.platform !== 'win32') roots.push('/tmp')
+  const allowed = [...new Set(roots)].join('、')
+  const improved = new Error(
+    `文件沙箱拒绝了这次写入（${typeof policy?.mode === 'string' ? policy.mode : 'workspace-write'} 模式）。` +
+      `允许写入的根目录：${allowed}。请把保存目录改到其中之一，或把会话沙箱模式切到 danger-full-access 后重试。` +
+      `原始错误：${error instanceof Error ? error.message : String(error)}`,
+  )
+  improved.code = 'FS_SANDBOX_DENIED'
+  improved.cause = error
+  return improved
+}
+
+/**
  * Write one text artifact into a chosen directory through `ctx.fs`.
  *
- * `ctx.fs` is the sanctioned, sandbox-aware writer: it refuses paths outside
- * the execution world's allowed roots unless the caller is granted a wider
- * policy, which is exactly the behaviour a plugin should not route around.
- * It also has no binary write, which is why only the text formats can be saved.
+ * The write carries a session-scoped sandbox policy as the fifth argument,
+ * so `workspace-write` confines the write to the session's own workspace
+ * instead of the app process directory. `ctx.fs` has no binary write, which is
+ * why only the text formats can be saved.
  *
  * @param services - the resolved service bundle.
  * @param path - absolute target path.
  * @param content - UTF-8 text.
  * @param signal - optional cancellation.
+ * @param options - `{ sessionId, cwd }` for the policy resolver.
  * @returns `{ path, operation }` after a successful write.
  */
-export async function writeTextFile(services, path, content, signal) {
+export async function writeTextFile(services, path, content, signal, options) {
   const fs = services.fs
   if (fs === undefined || typeof fs.resolve !== 'function' || typeof fs.writeText !== 'function') {
     throw new Error('the fs service is unavailable, so saving to a directory is not possible')
   }
+  const policy = writePolicyFor(services, options)
   const target = await fs.resolve(path, { signal })
   const existing = typeof fs.stat === 'function' ? await fs.stat(target, signal) : undefined
   const intent = existing === undefined ? { kind: 'createIfAbsent' } : { kind: 'replaceIfVersion', version: existing.version }
-  await fs.writeText(target, content, intent, signal)
+  try {
+    await fs.writeText(target, content, intent, signal, policy)
+  } catch (error) {
+    const explained = sandboxDenial(error, policy)
+    if (explained !== undefined) throw explained
+    throw error
+  }
   return { path: target.displayPath ?? path, operation: existing === undefined ? 'create' : 'update' }
 }

@@ -3,6 +3,28 @@
 Notable changes only. Versions follow semantic versioning; this is a DSH
 plugin, so a new capability is a minor bump and a fix is a patch.
 
+## 0.3.2 — 2026-11-27
+
+A patch release fixing "Save to directory" under `workspace-write`.
+
+### 修复
+
+- **保存到目录不再被沙箱误拒**（issue #2）。之前写文件走 `fs.writeText(..., signal)`
+  只传了 4 个参数，没有带逐次沙箱策略；宿主于是用**没有会话**的默认策略解析，
+  工作区根退回到应用进程目录，导致 Windows 上明明属于当前会话工作区的路径也被
+  `FS_SANDBOX_DENIED` 拒绝。现在和内置写工具一样，用
+  `sandboxPolicy.resolve({ session })` 拿到会话自己的边界，作为 `fs.writeText`
+  的第 5 个参数传入。插件同时声明了 `sessions` 与 `sandboxPolicy` 依赖；拿不到
+  活会话时用导出日志里记录的 cwd 作为边界，老宿主没有这个服务时行为不变。
+- **拒绝信息能看懂。** 再遇到 `FS_SANDBOX_DENIED`，报错会直接列出本次策略允许
+  写入的根目录（会话工作区 + 系统临时目录），并说明可以切换会话沙箱模式重试，
+  不再像一条 Windows 权限错误。
+
+### 兼容性
+
+- 没有改变导出内容、导入流程或 UI；只影响把 Markdown / HTML / 纯文本保存到目录
+  时的宿主调用方式。写权限仍由会话策略决定，插件没有扩大权限。
+
 ## 0.3.1 — 2026-11-21
 
 A patch release: the composer's input fields and workspace picker work as
