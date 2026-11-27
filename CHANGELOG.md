@@ -3,6 +3,47 @@
 Notable changes only. Versions follow semantic versioning; this is a DSH
 plugin, so a new capability is a minor bump and a fix is a patch.
 
+## 0.3.3 — 2026-11-28
+
+A patch release: importing a session log now works on Windows, and between
+machines, for the first time.
+
+### 修复
+
+- **Windows 上导入必然失败。** `isAbsolutePath` 只认 `startsWith('/')`，Windows 的
+  `E:\...` 一律被判成相对路径，于是 `planImport` 造出的会话头没有 `cwd`，宿主的
+  `workspace.attachSession` 以 "its stored header carries no cwd to validate against"
+  拒绝。新增 `isAbsolutePath()`（认 `/`、双反斜杠、`X:/`、`X:\`），三处调用点全部改用它。
+
+- **`surface replace` 被宿主拒绝。** `planImport` 重排事件时只复制
+  `type/seq/time/data/surfaceOp`，漏掉事件顶层的 `sourceEventSeqs`，于是 `replace`
+  操作点不出它遮盖的 surface 节点。该字段现在随重排一起保留并重映射。
+
+- **`developer/message` 的 `headerSeq` 悬空。** `request/header` 在
+  `DROPPED_TYPES` 里，但幸存的 `developer/message` 会通过 `data.headerSeq` 引用它；
+  丢弃后该引用指向不存在的 seq。现在先收集被引用的 header 再决定丢弃，并把
+  `headerSeq` 一起重编号。
+
+- **跨机器导入无法挂载。** 另一台机器记录的 `cwd` 在本机不存在，宿主
+  `realpathNormalize` 报 "does not resolve"。`planImport` 现在检测到这种情况就改用
+  本机真实工作目录，并在 warnings 里说明改到了哪里；`--cwd=` 仍然优先。
+  `attachToWorkspace` 同时按候选目录逐个尝试，只吞掉"路径不可用"这一类错误。
+
+### 兼容性
+
+- 导出内容、UI 与会话格式都没有变；`--cwd=` 的行为也没有变。
+- `resolveSaveDirectory` 改用目标平台的路径分隔符拼接，不再对 Windows 路径拼出
+  混合分隔符。
+- 两条导入路由（log 与 zip）不再自行判定 recorded cwd，统一交给 `planImport`。
+
+### 验证
+
+Windows 11 + DSH Desktop 0.2.2-rc.5，用一份 1577 事件的真实会话日志实测：
+
+- 同机导入：`attached: true`，落盘 514268 字节
+- 跨机（记录路径来自另一台机器）：自动重定位，`attached: true`
+- 跨机 + 显式 `--cwd=`：落到指定目录，`attached: true`
+
 ## 0.3.2 — 2026-11-27
 
 A patch release fixing "Save to directory" under `workspace-write`.

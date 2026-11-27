@@ -17,6 +17,7 @@ import {
   API_PREFIX,
   COMMAND_HINT,
   contentDisposition,
+  isAbsolutePath,
   isTextFormat,
   defaultOptions,
   extensionFor,
@@ -27,8 +28,10 @@ import {
   PLUGIN_ID,
   tokenize,
 } from './options.js'
+import path from 'node:path'
 import { produceExport, dataUri } from './export.js'
 import { exportServices, readFileBytes, readImageBytes, readSessionLog, readSessionTitle, writeTextFile } from './sources.js'
+
 import { parseLogArtifact } from './log.js'
 import { ImportError, createImportedSession, eventsFromDialogue, eventsFromMarkdown, importZipAssets, newSessionId, planImport, rewriteAttachmentRefs } from './import.js'
 import { looksLikeChatboxJson } from './chatbox.js'
@@ -207,9 +210,12 @@ async function buildArtifact(ctx, state, resolved, signal) {
 /** Absolute target directory for a save request. */
 function resolveSaveDirectory(save, artifact, log, config) {
   const base = typeof save === 'string' && save !== '' ? save : config.defaultSaveDir
-  if (base.startsWith('/')) return base
+  if (isAbsolutePath(base)) return base
   const cwd = log.header !== undefined && typeof log.header.cwd === 'string' && log.header.cwd !== '' ? log.header.cwd : process.cwd()
-  return `${cwd.replace(/\/+$/u, '')}/${base}`
+  // A Windows session path separates with a backslash; joining it with a
+  // forward slash would produce a mixed-separator path some readers reject.
+  const sep = cwd.includes('/') && !cwd.includes('\\') ? '/' : path.sep
+  return [cwd.replace(/[\\/]+$/, ''), base].join(sep)
 }
 
 /**
@@ -346,18 +352,20 @@ export async function runImport(ctx, request) {
       })()
     : parseLogArtifact(text)
 
-  // An explicit --cwd wins. Otherwise the session keeps the directory it was
-  // recorded in, which is what makes a self-import land back where it belongs;
-  // a log from another machine can override it with --cwd.
-  const recorded = typeof parsed.header?.cwd === 'string' && parsed.header.cwd.startsWith('/') ? parsed.header.cwd : undefined
-  const cwd = request.cwd ?? recorded
+  // Only an explicit --cwd is forwarded: the planner owns the recorded
+  // directory, because it is also the one place that knows whether that path
+  // exists on this machine. Passing it through here would bypass that check and
+  // hand the host a cwd it cannot resolve.
   const plan = planImport(parsed, {
-    cwd,
+    cwd: request.cwd,
     title: request.title ?? parsed.title,
     now,
   })
-  if (request.cwd === undefined && recorded !== undefined) {
-    plan.warnings.push(`工作目录沿用原会话记录：${recorded}（不存在请用 --cwd= 指定）`)
+  if (request.cwd === undefined) {
+    const recorded = typeof parsed.header?.cwd === 'string' && parsed.header.cwd !== '' ? parsed.header.cwd : undefined
+    if (recorded !== undefined && plan.header.cwd === recorded) {
+      plan.warnings.push(`工作目录沿用原会话记录：${recorded}（不存在请用 --cwd= 指定）`)
+    }
   }
 
   const summary = {
@@ -625,11 +633,14 @@ export async function runImportZip(ctx, request) {
     rewriteAttachmentRefs(parsed.events, assetInfo.idMap)
   }
 
-  const recorded = typeof parsed.header?.cwd === 'string' && parsed.header.cwd.startsWith('/') ? parsed.header.cwd : undefined
-  const cwd = request.cwd ?? recorded
-  const plan = planImport(parsed, { cwd, title: request.title ?? parsed.title, now })
-  if (request.cwd === undefined && recorded !== undefined) {
-    plan.warnings.push(`工作目录沿用原会话记录：${recorded}（不存在请用 --cwd= 指定）`)
+  // Same division of labour as the log import: the planner decides what the
+  // recorded directory is worth here, so this route forwards only --cwd.
+  const plan = planImport(parsed, { cwd: request.cwd, title: request.title ?? parsed.title, now })
+  if (request.cwd === undefined) {
+    const recorded = typeof parsed.header?.cwd === 'string' && parsed.header.cwd !== '' ? parsed.header.cwd : undefined
+    if (recorded !== undefined && plan.header.cwd === recorded) {
+      plan.warnings.push(`工作目录沿用原会话记录：${recorded}（不存在请用 --cwd= 指定）`)
+    }
   }
   if (manifest.length > 0) {
     plan.warnings.push(

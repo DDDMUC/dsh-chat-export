@@ -15,6 +15,9 @@
 // are unit-testable without a host.
 
 import { randomUUID } from 'node:crypto'
+import { statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { isAbsolutePath } from './options.js'
 import { dialogueTurns, readChatbox } from './chatbox.js'
 import { SESSION_FORMAT_VERSION } from './log.js'
 import { idVariants } from './sources.js'
@@ -103,6 +106,43 @@ function remapSeq(value, mapping) {
   return mapping.get(value)
 }
 
+/**
+ * Whether a path names a directory that exists on this machine.
+ *
+ * Deliberately synchronous and import-free beyond `node:fs`: the planner stays
+ * pure enough to run in a unit test, and a missing directory is the only
+ * question being asked here.
+ *
+ * @param candidate - absolute path already validated by `isAbsolutePath`.
+ * @returns true when the path resolves to a directory.
+ */
+function pathExists(candidate) {
+  try {
+    return statSync(candidate).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The directory a relocated session should record on this machine.
+ *
+ * `process.cwd()` is the app's launch directory, not the user's project, so a
+ * session that lands there can look misplaced. The host's own workspace policy
+ * is preferred when it exposes a root. Both are real directories by construction.
+ *
+ * @returns an absolute path that exists.
+ */
+function thisMachineCwd() {
+  try {
+    const here = process.cwd()
+    if (typeof here === 'string' && here !== '') return here
+  } catch {
+    // A confined process may refuse to report its working directory.
+  }
+  return homedir()
+}
+
 /** Rewrite every seq reference a surviving event carries. */
 function remapReferences(event, mapping) {
   const data = event.data
@@ -121,6 +161,21 @@ function remapReferences(event, mapping) {
         target.seq = next
       }
     }
+  }
+
+  // The cited sources live on the EVENT (top level), not inside surfaceOp:
+  // the host's isReplaceOp() accepts exactly {op, startSeq, endSeq}, so a
+  // nested surfaceOp.sourceEventSeqs would itself be rejected.
+  if (Array.isArray(event.sourceEventSeqs)) {
+    event.sourceEventSeqs = event.sourceEventSeqs.map((seq) => remapSeq(seq, mapping)).filter((seq) => seq !== undefined)
+  }
+
+  // `developer/message` names the immutable request header its tool additions
+  // came from; that reference has to survive the renumbering as well.
+  if (event.type === 'developer/message' && typeof data.headerSeq === 'number') {
+    const next = remapSeq(data.headerSeq, mapping)
+    if (next === undefined) delete data.headerSeq
+    else data.headerSeq = next
   }
 
   const surfaceOp = event.surfaceOp
@@ -159,9 +214,23 @@ export function planImport(parsed, options = {}) {
   const kept = []
   const mapping = new Map()
 
+  // A surviving `developer/message` cites its tool definitions through
+  // `data.headerSeq`, and the host resolves that citation against a real
+  // earlier `request/header`. Dropping every header would leave that citation
+  // dangling and the whole seed is refused, so the headers that a survivor
+  // actually names are rescued back into the replay.
+  const citedHeaders = new Set()
   for (const event of events) {
     const type = typeof event?.type === 'string' ? event.type : ''
-    if (type === '' || DROPPED_TYPES.has(type)) {
+    if (type === 'developer/message' && typeof event?.data?.headerSeq === 'number') {
+      citedHeaders.add(event.data.headerSeq)
+    }
+  }
+
+  for (const event of events) {
+    const type = typeof event?.type === 'string' ? event.type : ''
+    const rescued = type === 'request/header' && citedHeaders.has(event.seq)
+    if (type === '' || (DROPPED_TYPES.has(type) && !rescued)) {
       const key = type === '' ? '(无 type)' : type
       dropped.set(key, (dropped.get(key) ?? 0) + 1)
       continue
@@ -181,12 +250,33 @@ export function planImport(parsed, options = {}) {
       data: event.data === undefined ? {} : structuredClone(event.data),
     }
     if (event.surfaceOp !== undefined) next.surfaceOp = structuredClone(event.surfaceOp)
+    // Event-level source citations must survive the replay: a `replace` op
+    // is refused unless it names every surface node it shadows.
+    if (event.sourceEventSeqs !== undefined) next.sourceEventSeqs = structuredClone(event.sourceEventSeqs)
     remapReferences(next, mapping)
     return next
   })
 
-  const cwd = typeof options.cwd === 'string' && options.cwd !== '' ? options.cwd : undefined
-  if (cwd !== undefined && !cwd.startsWith('/')) throw new ImportError('invalid-cwd', 'cwd 必须是绝对路径')
+  // A recorded cwd from another machine (a POSIX path on Windows, or a
+  // \Users\... path on macOS) is absolute by syntax but has no directory behind
+  // it here, and the host refuses to attach a session whose cwd it cannot
+  // resolve. Such a path is therefore replaced by this machine's own working
+  // directory, and the relocation is reported rather than hidden.
+  let cwd = typeof options.cwd === 'string' && options.cwd !== '' ? options.cwd : undefined
+  if (cwd !== undefined && !isAbsolutePath(cwd)) throw new ImportError('invalid-cwd', 'cwd 必须是绝对路径')
+  let relocatedFrom
+  // A same-machine import keeps the directory the session recorded, even when
+  // that directory has been deleted since: the caller can still reopen it, and
+  // silently relocating a session the user recognises would be worse than the
+  // host's own refusal. Only a path this machine cannot own is replaced.
+  const recordedCwd = typeof parsed.header?.cwd === 'string' && parsed.header.cwd !== '' ? parsed.header.cwd : undefined
+  if (cwd === undefined && recordedCwd !== undefined && isAbsolutePath(recordedCwd) && !pathExists(recordedCwd)) {
+    relocatedFrom = recordedCwd
+    cwd = thisMachineCwd()
+  }
+  if (cwd === undefined && recordedCwd !== undefined && isAbsolutePath(recordedCwd)) {
+    cwd = recordedCwd
+  }
 
   const header = {
     version: SESSION_FORMAT_VERSION,
@@ -209,6 +299,9 @@ export function planImport(parsed, options = {}) {
     warnings.push(`已跳过机器相关记录：${summary}`)
   }
   if (parsed.header?.id !== undefined) warnings.push(`原会话是 ${parsed.header.id}，导入后是 ${header.id}`)
+  if (relocatedFrom !== undefined) {
+    warnings.push(`原会话记录的工作目录 ${relocatedFrom} 在本机不存在（很可能来自另一台机器），已改用 ${cwd}；需要别的目录请用 --cwd= 指定`)
+  }
 
   return { header, events: replayed, warnings, dropped: [...dropped.keys()], title }
 }
@@ -528,32 +621,96 @@ function emitFromTurns(turns, options = {}) {
  * @param header - the new session header.
  * @returns `{ attached, workspace?, reason? }`.
  */
+/**
+ * Candidate landing directories for a session whose recorded cwd is foreign.
+ *
+ * A workspace entity validates the session's stored header cwd against its own
+ * path, so an import from another machine cannot join the workspace it names:
+ * a POSIX path on Windows (or a \Users\... path on macOS) does not resolve, and
+ * a directory that does not exist cannot own a workspace either.
+ *
+ * The caller passes the directory it rewrote into the header first, so a
+ * successful attach lands exactly where the import intended. The remaining
+ * candidates are only a last resort when even that directory is unusable.
+ *
+ * @param ctx - host context.
+ * @param cwd - the directory already written into the header.
+ * @returns ordered, de-duplicated candidate paths.
+ */
+function attachCandidates(ctx, cwd) {
+  const candidates = []
+  const push = (value) => {
+    if (typeof value === 'string' && value !== '' && !candidates.includes(value)) candidates.push(value)
+  }
+  push(cwd)
+  try {
+    push(process.cwd())
+  } catch {
+    // A sandboxed process may refuse to report its own directory.
+  }
+  try {
+    const fsService = ctx.get('fs')
+    const policy = typeof fsService?.policy === 'function' ? fsService.policy() : fsService?.policy
+    push(policy?.workspaceRoot)
+  } catch {
+    // A missing fs service simply contributes no candidate.
+  }
+  return candidates
+}
+
+/**
+ * Put a created session into a workspace so the sidebar can see it.
+ *
+ * `attachSession` lives on a workspace ENTITY, not on the registry: the host's
+ * own session-creation path resolves an entity first and then calls it. The
+ * entity for the target directory is created-or-reused through the registry, so
+ * importing into a directory that is already a workspace lands in that one
+ * rather than making a second registration for the same path.
+ *
+ * @param ctx - host context.
+ * @param header - the new session header, already relocated to `cwd`.
+ * @returns `{ attached, workspace?, reason? }`.
+ */
 async function attachToWorkspace(ctx, header) {
   const registry = ctx.get('workspaceRegistry')
   if (registry === undefined || typeof registry.list !== 'function') {
     return { attached: false, reason: '宿主没有挂载 workspaceRegistry，新会话不会出现在侧边栏' }
   }
 
-  let workspace
-  if (typeof header.cwd === 'string' && header.cwd !== '' && typeof registry.create === 'function') {
+  for (const candidate of attachCandidates(ctx, header.cwd)) {
+    let workspace
+    if (typeof registry.create === 'function') {
+      try {
+        workspace = await registry.create(candidate)
+      } catch {
+        // A directory that does not exist cannot own a workspace.
+        workspace = undefined
+      }
+    }
+    if (workspace === undefined || typeof workspace.attachSession !== 'function') continue
     try {
-      workspace = await registry.create(header.cwd)
-    } catch {
-      // A recorded directory that no longer exists cannot own a workspace;
-      // fall through to whatever the registry already has.
-      workspace = undefined
+      await workspace.attachSession(header.id)
+      return { attached: true, workspace: workspace.path ?? String(workspace.id ?? ''), cwd: candidate }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // This candidate cannot host the session either (its own path and the
+      // header's path disagree); try the next one. Anything else is a real
+      // failure and must not be swallowed.
+      if (!/does not resolve|is not a directory|cwd resolves to|carries no cwd/.test(message)) throw error
     }
   }
-  if (workspace === undefined) {
-    const all = registry.list()
-    workspace = Array.isArray(all) ? all[0] : undefined
-  }
-  if (workspace === undefined || typeof workspace.attachSession !== 'function') {
-    return { attached: false, reason: '宿主里没有任何工作区，新会话不会出现在侧边栏' }
-  }
 
-  await workspace.attachSession(header.id)
-  return { attached: true, workspace: workspace.path ?? String(workspace.id ?? '') }
+  const all = registry.list()
+  const first = Array.isArray(all) ? all[0] : undefined
+  if (first !== undefined && typeof first.attachSession === 'function') {
+    try {
+      await first.attachSession(header.id)
+      return { attached: true, workspace: first.path ?? String(first.id ?? '') }
+    } catch {
+      // Fall through to the unattached report below.
+    }
+  }
+  return { attached: false, reason: '宿主里没有任何可用工作区，新会话不会出现在侧边栏' }
 }
 
 /**

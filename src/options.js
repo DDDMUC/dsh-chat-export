@@ -429,3 +429,24 @@ export function contentDisposition(filename) {
     .slice(0, 180)
   return `attachment; filename="${ascii === '' ? 'export' : ascii}"; filename*=UTF-8''${encodeURIComponent(value)}`
 }
+
+// --- Windows path helpers (added 2026-11-28) ---
+/**
+ * Whether a string is an absolute path on this machine.
+ *
+ * The plugin shipped with a POSIX-only `startsWith('/')` test, which on
+ * Windows (where every real path starts with a drive letter or a backslash)
+ * classified every recorded cwd as relative, dropped it from the imported
+ * session header, and left `workspace.attachSession` with nothing to validate
+ * against. Windows prefixes are therefore recognised explicitly.
+ *
+ * @param {unknown} value - candidate path.
+ * @returns {boolean} true when the value is absolute.
+ */
+export function isAbsolutePath(value) {
+  if (typeof value !== 'string' || value === '') return false
+  if (value.startsWith('/')) return true
+  if (value.startsWith('\\\\')) return true
+  // Drive-letter form: C:\..., C:/...
+  return /^[A-Za-z]:[\\/]/.test(value)
+}
